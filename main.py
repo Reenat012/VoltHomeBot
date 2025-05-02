@@ -1,10 +1,14 @@
+import asyncio
 import logging
 import os
+import signal
+
 from aiogram import Bot, Dispatcher, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.utils import executor
 from dotenv import load_dotenv
 
 logging.basicConfig(
@@ -140,8 +144,14 @@ async def process_confirmation(callback: types.CallbackQuery, state: FSMContext)
 
     await state.finish()
 
+async def on_shutdown(dp):
+    await dp.storage.close()
+    await dp.storage.wait_closed()
+    await bot.close()
 
 if __name__ == '__main__':
-    from aiogram import executor
+    # Регистрация обработчиков сигналов
+    signal.signal(signal.SIGINT, lambda s, f: asyncio.get_event_loop().create_task(on_shutdown(dp)))
+    signal.signal(signal.SIGTERM, lambda s, f: asyncio.get_event_loop().create_task(on_shutdown(dp)))
 
     executor.start_polling(dp, skip_updates=True)
