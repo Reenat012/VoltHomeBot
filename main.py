@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Конфигурация вебхука
-WEBHOOK_HOST = 'https://83.217.220.42' #Замените на ваш домен
+WEBHOOK_HOST = 'https://reenat012-volthomebot-2d67.twc1.net' #Замените на ваш домен
 WEBHOOK_PATH = '/webhook'
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 
