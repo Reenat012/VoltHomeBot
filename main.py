@@ -1,37 +1,44 @@
-import asyncio
-import logging
-import os
-import signal
+"""
+Главный файл Telegram-бота с интеграцией Webhook для Timeweb
+"""
 
-from aiogram import Bot, Dispatcher, types
+# Импорт необходимых библиотек
+import os
+import logging
+from aiogram import Bot, Dispatcher, types, executor
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.utils import executor
+from aiogram.utils.executor import start_webhook
 from dotenv import load_dotenv
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.FileHandler("bot.log"), logging.StreamHandler()]
-)
-logger = logging.getLogger(__name__)
 
 load_dotenv()
 
+# Конфигурация вебхука
+WEBHOOK_HOST = 'https://ваш_домен.ru'  # Замените на ваш домен
+WEBHOOK_PATH = '/webhook'
+WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
+
+WEBAPP_HOST = '0.0.0.0'
+WEBAPP_PORT = 8000  # Порт должен совпадать с настройками Nginx
+
+# Инициализация бота
 bot = Bot(token=os.getenv("BOT_TOKEN"))
 storage = MemoryStorage()
 dp = Dispatcher(bot, storage=storage)
 
-# Клавиатуры
-cancel_kb = ReplyKeyboardMarkup([[KeyboardButton("Отмена")]], resize_keyboard=True)
-confirm_kb = InlineKeyboardMarkup().row(
-    InlineKeyboardButton("✅ Подтвердить", callback_data="confirm_yes"),
-    InlineKeyboardButton("❌ Отменить", callback_data="confirm_no")
+# ================== КОНФИГУРАЦИЯ БОТА ==================
+cancel_kb = types.ReplyKeyboardMarkup(
+    [[types.KeyboardButton("Отмена")]],
+    resize_keyboard=True
 )
 
-# Вопросы
+confirm_kb = types.InlineKeyboardMarkup().row(
+    types.InlineKeyboardButton("✅ Подтвердить", callback_data="confirm_yes"),
+    types.InlineKeyboardButton("❌ Отменить", callback_data="confirm_no")
+)
+
 QUESTIONS = [
     "Как вас зовут?",
     "Введите адрес квартиры:",
@@ -41,20 +48,18 @@ QUESTIONS = [
     "Дополнительные пожелания:"
 ]
 
-
 class Form(StatesGroup):
+    """Класс для управления состояниями диалога"""
     answers = State()
     confirm = State()
 
-
-# --- Упрощенное ценообразование ---
+# Логика расчета цены
 BASE_PRICES = {
     1: (10000, 18000),
     2: (18000, 30000),
     3: (30000, 50000),
-    4: (50000, None)  # Индивидуальный расчет
+    4: (50000, None)
 }
-
 
 def calculate_price(data):
     try:
@@ -65,9 +70,8 @@ def calculate_price(data):
             return "Индивидуальный расчет (квартира более 100 м² или 4+ комнат)"
 
         base_min, base_max = BASE_PRICES.get(rooms, (0, 0))
-        base_price = (base_min + base_max) // 2  # Среднее значение
+        base_price = (base_min + base_max) // 2
 
-        # Форматирование отчета
         report = [
             "🔧 *Предварительный расчет стоимости:*",
             f"- Базовый проект ({rooms}-комн., {area} м²): {base_price:,} руб.",
@@ -76,15 +80,13 @@ def calculate_price(data):
         ]
 
         return '\n'.join(report).replace(',', ' ')
-
     except Exception as e:
-        logger.error(f"Calculation error: {e}")
         return "Не удалось рассчитать стоимость. Инженер свяжется с вами для уточнений."
 
-
-# --- Обработчики ---
-@dp.message_handler(commands=['start'])
+# ================== ОБРАБОТЧИКИ СОБЫТИЙ ==================
+@dp.message_handler(commands=['start', 'help'])
 async def cmd_start(message: types.Message):
+    """Обработчик команды /start"""
     await Form.answers.set()
     await message.answer("🔌 Заполните заявку на проектирование:", reply_markup=cancel_kb)
     await message.answer(QUESTIONS[0])
@@ -93,14 +95,12 @@ async def cmd_start(message: types.Message):
         data['current_question'] = 0
         data['answers'] = []
 
-
 @dp.message_handler(state=Form.answers)
 async def process_answers(message: types.Message, state: FSMContext):
     async with state.proxy() as data:
         current_question = data['current_question']
         answer = message.text
 
-        # Валидация
         if current_question == 2 and not answer.replace('.', '').isdigit():
             await message.answer("⚠️ Введите число (например: 45.5)!")
             return
@@ -114,18 +114,15 @@ async def process_answers(message: types.Message, state: FSMContext):
             data['current_question'] += 1
             await message.answer(QUESTIONS[data['current_question']])
         else:
-            # Расчет стоимости
             price_report = calculate_price(data)
             await Form.confirm.set()
             await message.answer(price_report, parse_mode="Markdown")
             await message.answer("Подтверждаете заявку?", reply_markup=confirm_kb)
 
-
 @dp.callback_query_handler(lambda c: c.data in ['confirm_yes', 'confirm_no'], state=Form.confirm)
 async def process_confirmation(callback: types.CallbackQuery, state: FSMContext):
     if callback.data == 'confirm_yes':
         async with state.proxy() as data:
-            # Отправка проектировщику
             report = "📋 *Новая заявка*\n\n"
             report += f"👤 {data['answers'][0]} (ID: {callback.from_user.id})\n"
             report += f"📍 Адрес: {data['answers'][1]}\n\n"
@@ -141,17 +138,26 @@ async def process_confirmation(callback: types.CallbackQuery, state: FSMContext)
             await callback.message.answer("✅ Заявка отправлена! Спасибо!")
     else:
         await callback.message.answer("❌ Заявка отменена.")
-
     await state.finish()
 
+async def on_startup(dp):
+    await bot.set_webhook(WEBHOOK_URL)
+    logging.info("Бот запущен через вебхук")
+
 async def on_shutdown(dp):
+    logging.warning('Завершение работы...')
+    await bot.delete_webhook()
     await dp.storage.close()
     await dp.storage.wait_closed()
-    await bot.close()
+    logging.warning('Все соединения закрыты')
 
 if __name__ == '__main__':
-    # Регистрация обработчиков сигналов
-    signal.signal(signal.SIGINT, lambda s, f: asyncio.get_event_loop().create_task(on_shutdown(dp)))
-    signal.signal(signal.SIGTERM, lambda s, f: asyncio.get_event_loop().create_task(on_shutdown(dp)))
-
-    executor.start_polling(dp, skip_updates=True)
+    logging.basicConfig(level=logging.INFO)
+    start_webhook(
+        dispatcher=dp,
+        webhook_path=WEBHOOK_PATH,
+        on_startup=on_startup,
+        on_shutdown=on_shutdown,
+        host=WEBAPP_HOST,
+        port=WEBAPP_PORT
+    )
