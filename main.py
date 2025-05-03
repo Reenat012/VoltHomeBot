@@ -143,8 +143,12 @@ async def process_confirmation(callback: types.CallbackQuery, state: FSMContext)
     await state.finish()
 
 async def on_startup(dp):
-    await bot.set_webhook(WEBHOOK_URL)
-    logging.info("Бот запущен через вебхук")
+    try:
+        await bot.set_webhook(WEBHOOK_URL)
+        logging.info("Webhook установлен")
+    except Exception as e:
+        logging.error(f"Ошибка вебхука: {e}")
+        exit(1)
 
 async def on_shutdown(dp):
     logging.warning('Завершение работы...')
