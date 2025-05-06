@@ -285,7 +285,7 @@ async def confirm(callback: types.CallbackQuery, state: FSMContext):
                 req_num = get_next_request_number()
                 username = f"@{callback.from_user.username}" if callback.from_user.username else "N/A"
 
-                report = f"📋 *Заявка №{req_num}*\nТип: {'Учебный' if data['project_type'] == 'study' else 'Рабочий'}\n"
+                report = f"📋 *Новая заявка! Номер заявки №{req_num}*\nТип: {'Учебный' if data['project_type'] == 'study' else 'Рабочий'}\n"
                 report += f"🆔 {callback.from_user.id} | 📧 {username}\n\n"
 
                 if data['project_type'] == "work":
@@ -323,7 +323,7 @@ async def confirm(callback: types.CallbackQuery, state: FSMContext):
                 )
 
                 await callback.message.answer(
-                    f"✅ Заявка №{req_num} принята!\nОжидайте связи специалиста.",
+                    f"✅ Ваша заявка принята! Номер заявка №{req_num}. \nОжидайте связи специалиста.",
                     reply_markup=new_request_kb
                 )
 
