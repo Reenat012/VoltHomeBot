@@ -1,7 +1,6 @@
 """
 Главный файл Telegram-бота с интеграцией Webhook для Timeweb
 """
-
 import os
 import logging
 import random
@@ -43,8 +42,8 @@ project_type_kb = types.ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-cancel_kb = types.ReplyKeyboardMarkup(
-    [[types.KeyboardButton("Отмена")]],
+universal_cancel_kb = types.ReplyKeyboardMarkup(
+    [[types.KeyboardButton("Отмена заявки")]],
     resize_keyboard=True
 )
 
@@ -56,7 +55,8 @@ new_request_kb = types.ReplyKeyboardMarkup(
 building_type_kb = types.ReplyKeyboardMarkup(
     [
         [types.KeyboardButton("Жилое"), types.KeyboardButton("Коммерческое")],
-        [types.KeyboardButton("Промышленное"), types.KeyboardButton("Другое")]
+        [types.KeyboardButton("Промышленное"), types.KeyboardButton("Другое")],
+        [types.KeyboardButton("Отмена заявки")]
     ],
     resize_keyboard=True
 )
@@ -72,7 +72,6 @@ WORK_QUESTIONS = [
     "Количество помещений:",
     "Особые требования к проекту:"
 ]
-
 STUDY_QUESTIONS = [
     "Укажите тему учебного проекта:",
     "Требуемый объем работы (страниц):",
@@ -94,7 +93,6 @@ WORK_BASE_PRICES = {
     3: (40000, 70000),  # 100-200 м²
     4: (70000, None)    # Свыше 200 м²
 }
-
 STUDY_BASE_PRICES = {
     1: (5000, 10000),   # До 20 страниц
     2: (10000, 15000),  # 20-40 страниц
@@ -115,14 +113,12 @@ def get_next_request_number():
     try:
         if not os.path.exists(REQUEST_COUNTER_FILE):
             init_request_counter()
-
         with open(REQUEST_COUNTER_FILE, 'r+') as f:
             try:
                 counter = int(f.read().strip() or 0)
             except ValueError:
                 counter = 0
                 logging.warning("Сброс счетчика заявок")
-
             counter += 1
             f.seek(0)
             f.write(str(counter))
@@ -136,13 +132,11 @@ def calculate_work_price(data):
     try:
         area = float(data['answers'][0])
         building = data['answers'][2]
-
         complexity = {
             "Жилое": 1.0,
             "Коммерческое": 1.3,
             "Промышленное": 1.5
         }.get(building.split()[0], 1.2)
-
         if area <= 50:
             price_range = WORK_BASE_PRICES[1]
         elif area <= 100:
@@ -151,15 +145,13 @@ def calculate_work_price(data):
             price_range = WORK_BASE_PRICES[3]
         else:
             price_range = WORK_BASE_PRICES[4]
-
         base_price = (price_range[0] + (price_range[1] or price_range[0]*1.5)) // 2
         total = int(base_price * complexity)
-
         report = [
             "🔧 *Предварительный расчет:*",
             f"- Площадь: {area} м² | Тип: {building}",
             f"- Стоимость: {total:,} руб.",
-            "\n_Точная сумма после анализа требований_"
+            "_Точная сумма после анализа требований_"
         ]
         return '\n'.join(report).replace(',', ' ')
     except Exception as e:
@@ -175,12 +167,11 @@ def calculate_study_price(data):
             price = (STUDY_BASE_PRICES[2][0] + STUDY_BASE_PRICES[2][1]) // 2
         else:
             price = STUDY_BASE_PRICES[3][0] * 1.2
-
         report = [
             "📚 *Стоимость учебного проекта:*",
             f"- Тема: {data['answers'][0]}",
             f"- Объем: {pages} стр. → {price:,} руб.",
-            "\n_Цена может измениться после уточнения требований_"
+            "_Цена может измениться после уточнения требований_"
         ]
         return '\n'.join(report).replace(',', ' ')
     except Exception as e:
@@ -188,6 +179,11 @@ def calculate_study_price(data):
         return "❌ Не удалось рассчитать. Менеджер свяжется с вами."
 
 # Обработчики
+@dp.message_handler(lambda message: message.text == "Отмена заявки", state="*")
+async def handle_cancel(message: types.Message, state: FSMContext):
+    await state.finish()
+    await cmd_start(message)
+
 @dp.message_handler(commands=['start', 'help'])
 async def cmd_start(message: types.Message):
     await Form.project_type.set()
@@ -214,7 +210,7 @@ async def process_type(message: types.Message, state: FSMContext):
         data['answers'] = []
 
     await Form.answers.set()
-    await message.answer(data['questions'][0], reply_markup=cancel_kb)
+    await message.answer(data['questions'][0], reply_markup=universal_cancel_kb)
 
 @dp.message_handler(state=Form.answers)
 async def process_answers(message: types.Message, state: FSMContext):
@@ -246,7 +242,7 @@ async def process_answers(message: types.Message, state: FSMContext):
 
         if current < len(data['questions']) - 1:
             data['current_question'] += 1
-            await message.answer(data['questions'][data['current_question']])
+            await message.answer(data['questions'][data['current_question']], reply_markup=universal_cancel_kb)
         else:
             if data['project_type'] == "work":
                 data['price_report'] = calculate_work_price(data)
@@ -262,12 +258,12 @@ async def process_building(message: types.Message, state: FSMContext):
     async with state.proxy() as data:
         if message.text == "Другое":
             await Form.custom_building.set()
-            await message.answer("📝 Введите свой вариант типа здания:", reply_markup=cancel_kb)
+            await message.answer("📝 Введите свой вариант типа здания:", reply_markup=universal_cancel_kb)
         else:
             data['answers'].append(message.text)
             await Form.answers.set()
             data['current_question'] += 1  # Важное исправление!
-            await message.answer(data['questions'][data['current_question']])
+            await message.answer(data['questions'][data['current_question']], reply_markup=universal_cancel_kb)
 
 @dp.message_handler(state=Form.custom_building)
 async def process_custom_building(message: types.Message, state: FSMContext):
@@ -275,7 +271,7 @@ async def process_custom_building(message: types.Message, state: FSMContext):
         data['answers'].append(f"Другое ({message.text})")
         await Form.answers.set()
         data['current_question'] += 1  # Важное исправление!
-        await message.answer(data['questions'][data['current_question']])
+        await message.answer(data['questions'][data['current_question']], reply_markup=universal_cancel_kb)
 
 @dp.callback_query_handler(lambda c: c.data in ['confirm_yes', 'confirm_no'], state=Form.confirm)
 async def confirm(callback: types.CallbackQuery, state: FSMContext):
@@ -284,16 +280,15 @@ async def confirm(callback: types.CallbackQuery, state: FSMContext):
             try:
                 req_num = get_next_request_number()
                 username = f"@{callback.from_user.username}" if callback.from_user.username else "N/A"
-
-                report = f"📋 *Заявка №{req_num}*\nТип: {'Учебный' if data['project_type'] == 'study' else 'Рабочий'}\n"
-                report += f"🆔 {callback.from_user.id} | 📧 {username}\n\n"
+                report = f"📋 *Заявка №{req_num}\nТип: {'Учебный' if data['project_type'] == 'study' else 'Рабочий'}\n"
+                report += f"🆔 {callback.from_user.id} | 📧 {username}\n"
 
                 if data['project_type'] == "work":
                     report += (
                         f"🏢 Тип здания: {data['answers'][2]}\n"
                         f"📏 Площадь: {data['answers'][0]} м²\n"
                         f"🚪 Помещений: {data['answers'][1]}\n"
-                        f"💼 Требования: {data['answers'][3]}\n\n"
+                        f"💼 Требования: {data['answers'][3]}\n"
                         f"{data['price_report']}"
                     )
                 else:
@@ -301,7 +296,7 @@ async def confirm(callback: types.CallbackQuery, state: FSMContext):
                         f"📖 Тема: {data['answers'][0]}\n"
                         f"📄 Объем: {data['answers'][1]} стр.\n"
                         f"⏳ Срок: {data['answers'][2]}\n"
-                        f"💡 Пожелания: {data['answers'][3]}\n\n"
+                        f"💡 Пожелания: {data['answers'][3]}\n"
                         f"{data['price_report']}"
                     )
 
@@ -322,7 +317,6 @@ async def confirm(callback: types.CallbackQuery, state: FSMContext):
                     f"✅ Заявка №{req_num} принята!\nОжидайте связи специалиста.",
                     reply_markup=new_request_kb
                 )
-
             except Exception as e:
                 logging.error(f"Ошибка отправки заявки: {str(e)}")
                 await callback.message.answer(
@@ -330,10 +324,8 @@ async def confirm(callback: types.CallbackQuery, state: FSMContext):
                     reply_markup=new_request_kb
                 )
     else:
-        await callback.message.answer(
-            "❌ Заявка отменена.",
-            reply_markup=new_request_kb
-        )
+        await handle_cancel(callback.message, state)
+
     await state.finish()
 
 # Вебхук
