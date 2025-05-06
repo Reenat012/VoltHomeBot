@@ -35,16 +35,6 @@ WELCOME_PHRASES = [
     "Готовы создать еще один проект? Вперед!"
 ]
 
-# Типовые электроприборы
-APPLIANCES = [
-    ("Стиральная машина (2.5 кВт)", 2500),
-    ("Посудомоечная машина (2 кВт)", 2000),
-    ("Электроплита (7 кВт)", 7000),
-    ("Кондиционер (3.5 кВт)", 3500),
-    ("Бойлер (5 кВт)", 5000),
-    ("Духовой шкаф (4 кВт)", 4000)
-]
-
 # Клавиатуры
 project_type_kb = types.ReplyKeyboardMarkup(
     [
@@ -57,6 +47,11 @@ project_type_kb = types.ReplyKeyboardMarkup(
 cancel_kb = types.ReplyKeyboardMarkup(
     [[types.KeyboardButton("Отмена")]],
     resize_keyboard=True
+)
+
+confirm_kb = types.ReplyKeyboardMarkup(
+[[types.KeyboardButton("Подтвердить"), types.KeyboardButton("Отмена")]],
+resize_keyboard=True
 )
 
 new_request_kb = types.ReplyKeyboardMarkup(
@@ -72,24 +67,10 @@ building_type_kb = types.ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-def appliances_keyboard():
-    kb = types.InlineKeyboardMarkup()
-    for appliance, _ in APPLIANCES:
-        kb.add(types.InlineKeyboardButton(
-            text=appliance,
-            callback_data=f"appliance_{appliance}"
-        ))
-    kb.row(
-        types.InlineKeyboardButton("✏️ Свое устройство", callback_data="custom_appliance"),
-        types.InlineKeyboardButton("✅ Готово", callback_data="finish_appliances")
-    )
-    return kb
-
 # Вопросы
 WORK_QUESTIONS = [
     "Укажите площадь объекта (м²):",
     "Количество помещений:",
-    "Тип здания:",
     "Особые требования к проекту:"
 ]
 
@@ -103,7 +84,6 @@ STUDY_QUESTIONS = [
 class Form(StatesGroup):
     project_type = State()
     answers = State()
-    appliances = State()
     building_type = State()
     custom_building = State()
     confirm = State()
@@ -162,7 +142,7 @@ def calculate_work_price(data):
             "Жилое": 1.0,
             "Коммерческое": 1.3,
             "Промышленное": 1.5
-        }.get(building.split()[0], 1.2)  # Учитываем только первое слово для "Другое"
+        }.get(building.split()[0], 1.2)
 
         if area <= 50:
             price_range = WORK_BASE_PRICES[1]
@@ -236,7 +216,6 @@ async def process_type(message: types.Message, state: FSMContext):
         data['questions'] = STUDY_QUESTIONS if data['project_type'] == "study" else WORK_QUESTIONS
         data['current_question'] = 0
         data['answers'] = []
-        data['appliances'] = []
 
     await Form.answers.set()
     await message.answer(data['questions'][0], reply_markup=cancel_kb)
@@ -247,7 +226,6 @@ async def process_answers(message: types.Message, state: FSMContext):
         current = data['current_question']
         answer = message.text
 
-        # Валидация рабочих проектов
         if data['project_type'] == "work":
             if current == 0 and not answer.replace('.', '').isdigit():
                 await message.answer("🔢 Введите число для площади!")
@@ -260,7 +238,6 @@ async def process_answers(message: types.Message, state: FSMContext):
                 await message.answer("🏢 Выберите тип здания:", reply_markup=building_type_kb)
                 return
 
-        # Валидация учебных проектов
         if data['project_type'] == "study" and current == 1 and not answer.isdigit():
             await message.answer("🔢 Введите число страниц!")
             return
@@ -271,14 +248,12 @@ async def process_answers(message: types.Message, state: FSMContext):
             data['current_question'] += 1
             next_q = data['questions'][data['current_question']]
 
-            # Обработка электроприборов
             if data['project_type'] == "work" and data['current_question'] == 2:
-                await Form.appliances.set()
-                await message.answer("⚡ Добавьте электроприборы:", reply_markup=appliances_keyboard())
+                await Form.building_type.set()
+                await message.answer("🏢 Выберите тип здания:", reply_markup=building_type_kb)
             else:
                 await message.answer(next_q)
         else:
-            # Расчет стоимости
             if data['project_type'] == "work":
                 data['price_report'] = calculate_work_price(data)
             else:
@@ -306,30 +281,6 @@ async def process_custom_building(message: types.Message, state: FSMContext):
         await Form.answers.set()
         await process_answers(message, state)
 
-@dp.callback_query_handler(lambda c: c.data.startswith('appliance_'), state=Form.appliances)
-async def add_appliance(callback: types.CallbackQuery, state: FSMContext):
-    async with state.proxy() as data:
-        appliance = callback.data.split('_', 1)[1]
-        data['appliances'].append(appliance)
-        await callback.message.edit_reply_markup(appliances_keyboard())
-
-@dp.callback_query_handler(lambda c: c.data == 'custom_appliance', state=Form.appliances)
-async def request_custom_appliance(callback: types.CallbackQuery):
-    await callback.message.answer("✏️ Введите устройство и мощность (например: Чайник 1.8 кВт):")
-
-@dp.message_handler(state=Form.appliances)
-async def save_custom_appliance(message: types.Message, state: FSMContext):
-    async with state.proxy() as data:
-        data['appliances'].append(message.text)
-        await message.answer("⚡ Добавьте еще устройства или нажмите Готово:", reply_markup=appliances_keyboard())
-
-@dp.callback_query_handler(lambda c: c.data == 'finish_appliances', state=Form.appliances)
-async def finish_appliances(callback: types.CallbackQuery, state: FSMContext):
-    async with state.proxy() as data:
-        data['answers'].append('\n'.join(data['appliances']))
-        await Form.answers.set()
-        await callback.message.answer(data['questions'][3])
-
 @dp.callback_query_handler(lambda c: c.data in ['confirm_yes', 'confirm_no'], state=Form.confirm)
 async def confirm(callback: types.CallbackQuery, state: FSMContext):
     if callback.data == 'confirm_yes':
@@ -338,15 +289,14 @@ async def confirm(callback: types.CallbackQuery, state: FSMContext):
                 req_num = get_next_request_number()
                 username = f"@{callback.from_user.username}" if callback.from_user.username else "N/A"
 
-                report = f"📋 *Заявка №{req_num}*\n"
+                report = f"📋 *Новая заявка! Номер заявки №{req_num}*\n"
                 report += f"🆔 {callback.from_user.id} | 📧 {username}\n"
 
                 if data['project_type'] == "work":
                     report += (
                         f"🏢 {data['answers'][2]}\n"
                         f"📏 {data['answers'][0]} м² | 🚪 {data['answers'][1]} помещ.\n"
-                        f"⚡ Приборы:\n{data['answers'][3]}\n"
-                        f"💼 Требования: {data['answers'][4]}\n"
+                        f"💼 Требования: {data['answers'][3]}\n"
                         f"💵 {data['price_report']}"
                     )
                 else:
@@ -369,7 +319,7 @@ async def confirm(callback: types.CallbackQuery, state: FSMContext):
                     )
                 )
                 await callback.message.answer(
-                    f"✅ Заявка №{req_num} принята!\nОжидайте связи специалиста.",
+                    f"✅ Заявка принята! Номер заявки №{req_num} \nОжидайте связи специалиста.",
                     reply_markup=new_request_kb
                 )
             except Exception as e:
