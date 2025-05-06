@@ -1,7 +1,6 @@
 """
 Главный файл Telegram-бота с интеграцией Webhook для Timeweb
 """
-
 # Импорт необходимых библиотек
 import os
 import logging
@@ -46,7 +45,7 @@ new_request_kb = types.ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-# Остальные клавиатуры (без изменений)
+# Остальные клавиатуры
 project_type_kb = types.ReplyKeyboardMarkup(
     [
         [types.KeyboardButton("📚 Учебный проект")],
@@ -65,7 +64,7 @@ confirm_kb = types.InlineKeyboardMarkup().row(
     types.InlineKeyboardButton("❌ Отменить", callback_data="confirm_no")
 )
 
-# Вопросы для проектов (без изменений)
+# Вопросы для проектов
 WORK_QUESTIONS = [
     "Укажите площадь объекта (м²):",
     "Количество помещений:",
@@ -82,12 +81,26 @@ STUDY_QUESTIONS = [
     "Дополнительные пожелания:"
 ]
 
+# Базовые цены для расчета
+WORK_BASE_PRICES = {
+    1: (15000, 25000),  # До 50 м²
+    2: (25000, 40000),  # 50-100 м²
+    3: (40000, 70000),  # 100-200 м²
+    4: (70000, None)     # Свыше 200 м²
+}
+
+STUDY_BASE_PRICES = {
+    1: (5000, 10000),    # До 20 страниц
+    2: (10000, 15000),   # 20-40 страниц
+    3: (15000, None)     # Свыше 40 страниц
+}
+
 class Form(StatesGroup):
     project_type = State()
     answers = State()
     confirm = State()
 
-# Функции для работы с счетчиком заявок (без изменений)
+# Функции для работы с счетчиком заявок
 def init_request_counter():
     if not os.path.exists(REQUEST_COUNTER_FILE):
         try:
@@ -102,20 +115,17 @@ def get_next_request_number():
     try:
         if not os.path.exists(REQUEST_COUNTER_FILE):
             init_request_counter()
-
         with open(REQUEST_COUNTER_FILE, 'r+') as f:
             try:
                 counter = int(f.read().strip() or 0)
             except ValueError:
                 counter = 0
                 logging.warning("Некорректное значение в файле счетчика, сброс на 0")
-
             counter += 1
             f.seek(0)
             f.write(str(counter))
             f.truncate()
             return counter
-
     except Exception as e:
         logging.error(f"Ошибка при работе с файлом счетчика: {e}")
         import random
@@ -127,11 +137,10 @@ try:
 except Exception as e:
     logging.error(f"Не удалось инициализировать счетчик заявок: {e}")
 
-# Функции расчета цены (без изменений)
+# Функции расчета цены
 def calculate_work_price(data):
     try:
         area = float(data['answers'][0])
-
         if area <= 50:
             price_range = WORK_BASE_PRICES[1]
         elif area <= 100:
@@ -140,17 +149,14 @@ def calculate_work_price(data):
             price_range = WORK_BASE_PRICES[3]
         else:
             price_range = WORK_BASE_PRICES[4]
-
         base_price = (price_range[0] + (price_range[1] or price_range[0]*1.5)) // 2
-
-        report = [
-            "🔧 *Предварительный расчет стоимости рабочего проекта:*",
-            f"- Площадь объекта: {area} м²",
-            f"- Ориентировочная стоимость: {base_price:,} руб.",
+        report = (
+            "🔧 *Предварительный расчет стоимости рабочего проекта:*\n"
+            f"- Площадь объекта: {area} м²\n"
+            f"- Ориентировочная стоимость: {base_price:,} руб.\n"
             "\n_Точная стоимость будет определена после анализа технических требований._"
-        ]
-
-        return '\n'.join(report).replace(',', ' ')
+        )
+        return report.replace(',', ' ')
     except Exception as e:
         logging.error(f"Ошибка расчета цены: {e}")
         return "Не удалось рассчитать стоимость. Инженер свяжется с вами для уточнений."
@@ -158,25 +164,21 @@ def calculate_work_price(data):
 def calculate_study_price(data):
     try:
         pages = int(data['answers'][1]) if data['answers'][1].isdigit() else 0
-
         if pages <= 20:
             price_range = STUDY_BASE_PRICES[1]
         elif pages <= 40:
             price_range = STUDY_BASE_PRICES[2]
         else:
             price_range = STUDY_BASE_PRICES[3]
-
         base_price = (price_range[0] + (price_range[1] or price_range[0]*1.3)) // 2
-
-        report = [
-            "📚 *Предварительный расчет стоимости учебного проекта:*",
-            f"- Тема: {data['answers'][0]}",
-            f"- Объем: {pages} страниц",
-            f"- Ориентировочная стоимость: {base_price:,} руб.",
+        report = (
+            "📚 *Предварительный расчет стоимости учебного проекта:*\n"
+            f"- Тема: {data['answers'][0]}\n"
+            f"- Объем: {pages} страниц\n"
+            f"- Ориентировочная стоимость: {base_price:,} руб.\n"
             "\n_Окончательная цена может быть скорректирована после уточнения требований._"
-        ]
-
-        return '\n'.join(report).replace(',', ' ')
+        )
+        return report.replace(',', ' ')
     except Exception as e:
         logging.error(f"Ошибка расчета цены: {e}")
         return "Не удалось рассчитать стоимость. Менеджер свяжется с вами для уточнений."
@@ -231,6 +233,7 @@ async def process_answers(message: types.Message, state: FSMContext):
             elif current_question == 1 and not answer.isdigit():
                 await message.answer("⚠️ Пожалуйста, введите целое число для количества помещений!")
                 return
+
         elif data['project_type'] == "study":
             if current_question == 1 and not answer.isdigit():
                 await message.answer("⚠️ Пожалуйста, введите целое число для объема работы!")
@@ -240,7 +243,7 @@ async def process_answers(message: types.Message, state: FSMContext):
 
         if current_question < len(data['questions']) - 1:
             data['current_question'] += 1
-            await message.answer(data['questions'][data['current_question']])
+            await message.answer(data['questions'][data['current_question']], reply_markup=cancel_kb)
         else:
             if data['project_type'] == "work":
                 data['price_report'] = calculate_work_price(data)
@@ -258,29 +261,25 @@ async def process_confirmation(callback: types.CallbackQuery, state: FSMContext)
             try:
                 request_number = get_next_request_number()
                 username = f"@{callback.from_user.username}" if callback.from_user.username else "не указан"
-
                 contact_button = types.InlineKeyboardMarkup()
                 contact_button.add(types.InlineKeyboardButton(
                     text="💬 Написать пользователю",
                     url=f"tg://user?id={callback.from_user.id}"
                 ))
-
                 project_type = "Учебный проект" if data['project_type'] == "study" else "Рабочий проект"
-
                 report = (
-                    f"📋 *Заявка №{request_number}* ({project_type})\n\n"
+                    f"📋 *Новая заявка! Номер заявки №{request_number}* ({project_type})\n"
                     f"🆔 ID: `{callback.from_user.id}`\n"
-                    f"📧 Username: {username}\n\n"
+                    f"📧 Username: {username}\n"
                 )
-
                 if data['project_type'] == "work":
                     report += (
                         f"📏 *Площадь объекта:* {data['answers'][0]} м²\n"
                         f"🚪 *Помещений:* {data['answers'][1]}\n"
                         f"🔌 *Электроприборы:* {data['answers'][2]}\n"
                         f"🏢 *Тип здания:* {data['answers'][3]}\n"
-                        f"📝 *Технические требования:* {data['answers'][4]}\n\n"
-                        f"💵 *Расчет стоимости:*\n{data['price_report']}"
+                        f"📝 *Технические требования:* {data['answers'][4]}\n"
+                        f"💵 *Расчет стоимости:\n{data['price_report']}"
                     )
                 else:
                     report += (
@@ -288,10 +287,9 @@ async def process_confirmation(callback: types.CallbackQuery, state: FSMContext)
                         f"📄 *Объем работы:* {data['answers'][1]} стр.\n"
                         f"⏳ *Срок сдачи:* {data['answers'][2]}\n"
                         f"📚 *Методические требования:* {data['answers'][3]}\n"
-                        f"💡 *Пожелания:* {data['answers'][4]}\n\n"
-                        f"💵 *Расчет стоимости:*\n{data['price_report']}"
+                        f"💡 *Пожелания:* {data['answers'][4]}\n"
+                        f"💵 *Расчет стоимости:\n{data['price_report']}"
                     )
-
                 await bot.send_message(
                     chat_id=os.getenv("DESIGNER_CHAT_ID"),
                     text=report,
@@ -299,7 +297,7 @@ async def process_confirmation(callback: types.CallbackQuery, state: FSMContext)
                     reply_markup=contact_button
                 )
                 await callback.message.answer(
-                    f"✅ Заявка №{request_number} отправлена! Спасибо!",
+                    f"✅ Ваша заявка отправлена на обработку! Номер заявка №{request_number}. Спасибо за доверие!",
                     reply_markup=new_request_kb
                 )
             except Exception as e:
