@@ -5,6 +5,7 @@
 # Импорт необходимых библиотек
 import os
 import logging
+import random
 from aiogram import Bot, Dispatcher, types, executor
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
@@ -27,11 +28,67 @@ bot = Bot(token=os.getenv("BOT_TOKEN"))
 storage = MemoryStorage()
 dp = Dispatcher(bot, storage=storage)
 
-# ================== УЛУЧШЕННАЯ ФУНКЦИЯ ДЛЯ НУМЕРАЦИИ ЗАЯВОК ==================
+# ================== КОНФИГУРАЦИЯ ==================
 REQUEST_COUNTER_FILE = 'request_counter.txt'
 
+# Дежурные приветственные фразы (кроме первой, которая останется без изменений)
+WELCOME_PHRASES = [
+    "Снова к нам? Отлично! Давайте создадим новую заявку!",
+    "Рады видеть вас снова! Готовы оформить новую заявку?",
+    "Отлично, что вы вернулись! Приступим к новой заявке?",
+    "Новая заявка - новые возможности! Поехали!",
+    "Готовы создать еще один проект? Давайте начнем!"
+]
+
+# Клавиатура после завершения заявки
+new_request_kb = types.ReplyKeyboardMarkup(
+    [[types.KeyboardButton("📝 Новая заявка!")]],
+    resize_keyboard=True
+)
+
+# Остальные клавиатуры (без изменений)
+project_type_kb = types.ReplyKeyboardMarkup(
+    [
+        [types.KeyboardButton("📚 Учебный проект")],
+        [types.KeyboardButton("🏗️ Рабочий проект")]
+    ],
+    resize_keyboard=True
+)
+
+cancel_kb = types.ReplyKeyboardMarkup(
+    [[types.KeyboardButton("Отмена")]],
+    resize_keyboard=True
+)
+
+confirm_kb = types.InlineKeyboardMarkup().row(
+    types.InlineKeyboardButton("✅ Подтвердить", callback_data="confirm_yes"),
+    types.InlineKeyboardButton("❌ Отменить", callback_data="confirm_no")
+)
+
+# Вопросы для проектов (без изменений)
+WORK_QUESTIONS = [
+    "Укажите площадь объекта (м²):",
+    "Количество помещений:",
+    "Перечислите мощные электроприборы (с указанием мощности):",
+    "Тип здания (жилое, коммерческое, промышленное):",
+    "Дополнительные технические требования:"
+]
+
+STUDY_QUESTIONS = [
+    "Укажите тему учебного проекта:",
+    "Требуемый объем работы (страниц):",
+    "Срок сдачи проекта:",
+    "Методические требования (если есть):",
+    "Дополнительные пожелания:"
+]
+
+class Form(StatesGroup):
+    project_type = State()
+    answers = State()
+    confirm = State()
+
+# Функции для работы с счетчиком заявок (без изменений)
 def init_request_counter():
-    """Инициализирует файл счетчика, если он не существует"""
     if not os.path.exists(REQUEST_COUNTER_FILE):
         try:
             with open(REQUEST_COUNTER_FILE, 'w') as f:
@@ -42,7 +99,6 @@ def init_request_counter():
             raise
 
 def get_next_request_number():
-    """Возвращает следующий номер заявки с обработкой ошибок"""
     try:
         if not os.path.exists(REQUEST_COUNTER_FILE):
             init_request_counter()
@@ -65,70 +121,13 @@ def get_next_request_number():
         import random
         return random.randint(1000, 9999)
 
-# Инициализируем счетчик при старте
+# Инициализация счетчика
 try:
     init_request_counter()
 except Exception as e:
     logging.error(f"Не удалось инициализировать счетчик заявок: {e}")
 
-# ================== КОНФИГУРАЦИЯ БОТА ==================
-# Клавиатура выбора типа проекта
-project_type_kb = types.ReplyKeyboardMarkup(
-    [
-        [types.KeyboardButton("📚 Учебный проект")],
-        [types.KeyboardButton("🏗️ Рабочий проект")]
-    ],
-    resize_keyboard=True
-)
-
-cancel_kb = types.ReplyKeyboardMarkup(
-    [[types.KeyboardButton("Отмена")]],
-    resize_keyboard=True
-)
-
-confirm_kb = types.InlineKeyboardMarkup().row(
-    types.InlineKeyboardButton("✅ Подтвердить", callback_data="confirm_yes"),
-    types.InlineKeyboardButton("❌ Отменить", callback_data="confirm_no")
-)
-
-# Вопросы для рабочего проекта
-WORK_QUESTIONS = [
-    "Укажите площадь объекта (м²):",
-    "Количество помещений:",
-    "Перечислите мощные электроприборы (с указанием мощности):",
-    "Тип здания (жилое, коммерческое, промышленное):",
-    "Дополнительные технические требования:"
-]
-
-# Вопросы для учебного проекта
-STUDY_QUESTIONS = [
-    "Укажите тему учебного проекта:",
-    "Требуемый объем работы (страниц):",
-    "Срок сдачи проекта:",
-    "Методические требования (если есть):",
-    "Дополнительные пожелания:"
-]
-
-class Form(StatesGroup):
-    project_type = State()
-    answers = State()
-    confirm = State()
-
-# Логика расчета цены для рабочего проекта
-WORK_BASE_PRICES = {
-    1: (15000, 25000),  # До 50 м²
-    2: (25000, 40000),  # 50-100 м²
-    3: (40000, 70000),  # 100-200 м²
-    4: (70000, None)    # Свыше 200 м²
-}
-
-# Логика расчета цены для учебного проекта
-STUDY_BASE_PRICES = {
-    1: (5000, 10000),   # До 20 страниц
-    2: (10000, 15000),  # 20-40 страниц
-    3: (15000, None)    # Свыше 40 страниц
-}
-
+# Функции расчета цены (без изменений)
 def calculate_work_price(data):
     try:
         area = float(data['answers'][0])
@@ -192,6 +191,18 @@ async def cmd_start(message: types.Message):
         reply_markup=project_type_kb
     )
 
+# Новый обработчик для кнопки "Новая заявка!"
+@dp.message_handler(lambda message: message.text == "📝 Новая заявка!")
+async def new_request_handler(message: types.Message):
+    # Для первой заявки - стандартное приветствие
+    if random.random() < 0.5 or not hasattr(message, 'request_count'):
+        await cmd_start(message)
+    else:
+        # Для последующих - случайная приветственная фраза
+        welcome_phrase = random.choice(WELCOME_PHRASES)
+        await Form.project_type.set()
+        await message.answer(welcome_phrase, reply_markup=project_type_kb)
+
 @dp.message_handler(state=Form.project_type)
 async def process_project_type(message: types.Message, state: FSMContext):
     if message.text not in ["📚 Учебный проект", "🏗️ Рабочий проект"]:
@@ -213,7 +224,6 @@ async def process_answers(message: types.Message, state: FSMContext):
         current_question = data['current_question']
         answer = message.text
 
-        # Валидация для рабочих проектов
         if data['project_type'] == "work":
             if current_question == 0 and not answer.replace('.', '').isdigit():
                 await message.answer("⚠️ Пожалуйста, введите число для площади объекта!")
@@ -221,8 +231,6 @@ async def process_answers(message: types.Message, state: FSMContext):
             elif current_question == 1 and not answer.isdigit():
                 await message.answer("⚠️ Пожалуйста, введите целое число для количества помещений!")
                 return
-
-        # Валидация для учебных проектов
         elif data['project_type'] == "study":
             if current_question == 1 and not answer.isdigit():
                 await message.answer("⚠️ Пожалуйста, введите целое число для объема работы!")
@@ -260,7 +268,7 @@ async def process_confirmation(callback: types.CallbackQuery, state: FSMContext)
                 project_type = "Учебный проект" if data['project_type'] == "study" else "Рабочий проект"
 
                 report = (
-                    f"📋 *Новая заявка! Номер заявки №{request_number}* ({project_type})\n\n"
+                    f"📋 *Заявка №{request_number}* ({project_type})\n\n"
                     f"🆔 ID: `{callback.from_user.id}`\n"
                     f"📧 Username: {username}\n\n"
                 )
@@ -290,12 +298,21 @@ async def process_confirmation(callback: types.CallbackQuery, state: FSMContext)
                     parse_mode="Markdown",
                     reply_markup=contact_button
                 )
-                await callback.message.answer(f"✅ Ваша заявка отправлена! Номер заявки №{request_number}. Спасибо за доверие!")
+                await callback.message.answer(
+                    f"✅ Заявка №{request_number} отправлена! Спасибо!",
+                    reply_markup=new_request_kb
+                )
             except Exception as e:
                 logging.error(f"Ошибка при обработке заявки: {e}")
-                await callback.message.answer("⚠️ Произошла ошибка при обработке заявки. Пожалуйста, попробуйте позже.")
+                await callback.message.answer(
+                    "⚠️ Произошла ошибка при обработке заявки. Пожалуйста, попробуйте позже.",
+                    reply_markup=new_request_kb
+                )
     else:
-        await callback.message.answer("❌ Заявка отменена.")
+        await callback.message.answer(
+            "❌ Заявка отменена.",
+            reply_markup=new_request_kb
+        )
     await state.finish()
 
 # Остальной код без изменений
