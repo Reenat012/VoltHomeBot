@@ -44,11 +44,9 @@ def init_request_counter():
 def get_next_request_number():
     """Возвращает следующий номер заявки с обработкой ошибок"""
     try:
-        # Если файл не существует, создаем его
         if not os.path.exists(REQUEST_COUNTER_FILE):
             init_request_counter()
 
-        # Читаем и обновляем счетчик
         with open(REQUEST_COUNTER_FILE, 'r+') as f:
             try:
                 counter = int(f.read().strip() or 0)
@@ -64,7 +62,6 @@ def get_next_request_number():
 
     except Exception as e:
         logging.error(f"Ошибка при работе с файлом счетчика: {e}")
-        # Возвращаем случайное число как fallback
         import random
         return random.randint(1000, 9999)
 
@@ -75,6 +72,15 @@ except Exception as e:
     logging.error(f"Не удалось инициализировать счетчик заявок: {e}")
 
 # ================== КОНФИГУРАЦИЯ БОТА ==================
+# Клавиатура выбора типа проекта
+project_type_kb = types.ReplyKeyboardMarkup(
+    [
+        [types.KeyboardButton("📚 Учебный проект")],
+        [types.KeyboardButton("🏗️ Рабочий проект")]
+    ],
+    resize_keyboard=True
+)
+
 cancel_kb = types.ReplyKeyboardMarkup(
     [[types.KeyboardButton("Отмена")]],
     resize_keyboard=True
@@ -85,59 +91,121 @@ confirm_kb = types.InlineKeyboardMarkup().row(
     types.InlineKeyboardButton("❌ Отменить", callback_data="confirm_no")
 )
 
-QUESTIONS = [
-    "Как вас зовут?",
-    "Введите адрес квартиры:",
-    "Укажите площадь квартиры (м²):",
-    "Количество комнат:",
-    "Перечислите мощные электроприборы:",
+# Вопросы для рабочего проекта
+WORK_QUESTIONS = [
+    "Укажите площадь объекта (м²):",
+    "Количество помещений:",
+    "Перечислите мощные электроприборы (с указанием мощности):",
+    "Тип здания (жилое, коммерческое, промышленное):",
+    "Дополнительные технические требования:"
+]
+
+# Вопросы для учебного проекта
+STUDY_QUESTIONS = [
+    "Укажите тему учебного проекта:",
+    "Требуемый объем работы (страниц):",
+    "Срок сдачи проекта:",
+    "Методические требования (если есть):",
     "Дополнительные пожелания:"
 ]
 
 class Form(StatesGroup):
+    project_type = State()
     answers = State()
     confirm = State()
 
-# Логика расчета цены (без изменений)
-BASE_PRICES = {
-    1: (10000, 18000),
-    2: (18000, 30000),
-    3: (30000, 50000),
-    4: (50000, None)
+# Логика расчета цены для рабочего проекта
+WORK_BASE_PRICES = {
+    1: (15000, 25000),  # До 50 м²
+    2: (25000, 40000),  # 50-100 м²
+    3: (40000, 70000),  # 100-200 м²
+    4: (70000, None)    # Свыше 200 м²
 }
 
-def calculate_price(data):
+# Логика расчета цены для учебного проекта
+STUDY_BASE_PRICES = {
+    1: (5000, 10000),   # До 20 страниц
+    2: (10000, 15000),  # 20-40 страниц
+    3: (15000, None)    # Свыше 40 страниц
+}
+
+def calculate_work_price(data):
     try:
-        rooms = int(data['answers'][3])
-        area = float(data['answers'][2])
+        area = float(data['answers'][0])
 
-        if rooms >= 4 or area > 100:
-            return "Индивидуальный расчет (квартира более 100 м² или 4+ комнат)"
+        if area <= 50:
+            price_range = WORK_BASE_PRICES[1]
+        elif area <= 100:
+            price_range = WORK_BASE_PRICES[2]
+        elif area <= 200:
+            price_range = WORK_BASE_PRICES[3]
+        else:
+            price_range = WORK_BASE_PRICES[4]
 
-        base_min, base_max = BASE_PRICES.get(rooms, (0, 0))
-        base_price = (base_min + base_max) // 2
+        base_price = (price_range[0] + (price_range[1] or price_range[0]*1.5)) // 2
 
         report = [
-            "🔧 *Предварительный расчет стоимости:*",
-            f"- Базовый проект ({rooms}-комн., {area} м²): {base_price:,} руб.",
-            f"💎 *Итого: ~{base_price:,} руб.*",
-            "\n_Указанная стоимость является ориентировочной. Точная сумма будет определена после разработки ТЗ._"
+            "🔧 *Предварительный расчет стоимости рабочего проекта:*",
+            f"- Площадь объекта: {area} м²",
+            f"- Ориентировочная стоимость: {base_price:,} руб.",
+            "\n_Точная стоимость будет определена после анализа технических требований._"
         ]
 
         return '\n'.join(report).replace(',', ' ')
     except Exception as e:
+        logging.error(f"Ошибка расчета цены: {e}")
         return "Не удалось рассчитать стоимость. Инженер свяжется с вами для уточнений."
 
-# ================== ОБНОВЛЕННЫЕ ОБРАБОТЧИКИ ==================
+def calculate_study_price(data):
+    try:
+        pages = int(data['answers'][1]) if data['answers'][1].isdigit() else 0
+
+        if pages <= 20:
+            price_range = STUDY_BASE_PRICES[1]
+        elif pages <= 40:
+            price_range = STUDY_BASE_PRICES[2]
+        else:
+            price_range = STUDY_BASE_PRICES[3]
+
+        base_price = (price_range[0] + (price_range[1] or price_range[0]*1.3)) // 2
+
+        report = [
+            "📚 *Предварительный расчет стоимости учебного проекта:*",
+            f"- Тема: {data['answers'][0]}",
+            f"- Объем: {pages} страниц",
+            f"- Ориентировочная стоимость: {base_price:,} руб.",
+            "\n_Окончательная цена может быть скорректирована после уточнения требований._"
+        ]
+
+        return '\n'.join(report).replace(',', ' ')
+    except Exception as e:
+        logging.error(f"Ошибка расчета цены: {e}")
+        return "Не удалось рассчитать стоимость. Менеджер свяжется с вами для уточнений."
+
+# ================== ОБРАБОТЧИКИ СОБЫТИЙ ==================
 @dp.message_handler(commands=['start', 'help'])
 async def cmd_start(message: types.Message):
-    await Form.answers.set()
-    await message.answer("🔌 Заполните заявку на проектирование:", reply_markup=cancel_kb)
-    await message.answer(QUESTIONS[0])
+    await Form.project_type.set()
+    await message.answer(
+        "🔌 Добро пожаловать в сервис проектирования!\n"
+        "Выберите тип проекта:",
+        reply_markup=project_type_kb
+    )
 
-    async with dp.current_state().proxy() as data:
+@dp.message_handler(state=Form.project_type)
+async def process_project_type(message: types.Message, state: FSMContext):
+    if message.text not in ["📚 Учебный проект", "🏗️ Рабочий проект"]:
+        await message.answer("Пожалуйста, выберите тип проекта из предложенных вариантов.")
+        return
+
+    async with state.proxy() as data:
+        data['project_type'] = "study" if message.text == "📚 Учебный проект" else "work"
+        data['questions'] = STUDY_QUESTIONS if data['project_type'] == "study" else WORK_QUESTIONS
         data['current_question'] = 0
         data['answers'] = []
+
+    await Form.next()
+    await message.answer(data['questions'][0], reply_markup=cancel_kb)
 
 @dp.message_handler(state=Form.answers)
 async def process_answers(message: types.Message, state: FSMContext):
@@ -145,20 +213,32 @@ async def process_answers(message: types.Message, state: FSMContext):
         current_question = data['current_question']
         answer = message.text
 
-        if current_question == 2 and not answer.replace('.', '').isdigit():
-            await message.answer("⚠️ Введите число (например: 45.5)!")
-            return
-        elif current_question == 3 and not answer.isdigit():
-            await message.answer("⚠️ Введите целое число!")
-            return
+        # Валидация для рабочих проектов
+        if data['project_type'] == "work":
+            if current_question == 0 and not answer.replace('.', '').isdigit():
+                await message.answer("⚠️ Пожалуйста, введите число для площади объекта!")
+                return
+            elif current_question == 1 and not answer.isdigit():
+                await message.answer("⚠️ Пожалуйста, введите целое число для количества помещений!")
+                return
+
+        # Валидация для учебных проектов
+        elif data['project_type'] == "study":
+            if current_question == 1 and not answer.isdigit():
+                await message.answer("⚠️ Пожалуйста, введите целое число для объема работы!")
+                return
 
         data['answers'].append(answer)
 
-        if current_question < len(QUESTIONS) - 1:
+        if current_question < len(data['questions']) - 1:
             data['current_question'] += 1
-            await message.answer(QUESTIONS[data['current_question']])
+            await message.answer(data['questions'][data['current_question']])
         else:
-            data['price_report'] = calculate_price(data)
+            if data['project_type'] == "work":
+                data['price_report'] = calculate_work_price(data)
+            else:
+                data['price_report'] = calculate_study_price(data)
+
             await Form.confirm.set()
             await message.answer(data['price_report'], parse_mode="Markdown")
             await message.answer("Подтверждаете заявку?", reply_markup=confirm_kb)
@@ -177,18 +257,32 @@ async def process_confirmation(callback: types.CallbackQuery, state: FSMContext)
                     url=f"tg://user?id={callback.from_user.id}"
                 ))
 
+                project_type = "Учебный проект" if data['project_type'] == "study" else "Рабочий проект"
+
                 report = (
-                    f"📋 *Заявка №{request_number}*\n\n"
-                    f"👤 *Клиент:* {data['answers'][0]}\n"
+                    f"📋 *Новая заявка! Номер заявки №{request_number}* ({project_type})\n\n"
                     f"🆔 ID: `{callback.from_user.id}`\n"
                     f"📧 Username: {username}\n\n"
-                    f"📍 *Адрес:* {data['answers'][1]}\n\n"
-                    f"💵 *Рассчитанная стоимость:*\n{data['price_report']}\n\n"
-                    f"📏 *Площадь:* {data['answers'][2]} м²\n"
-                    f"🚪 *Комнат:* {data['answers'][3]}\n"
-                    f"🔌 *Приборы:* {data['answers'][4]}\n"
-                    f"📝 *Пожелания:* {data['answers'][5]}"
                 )
+
+                if data['project_type'] == "work":
+                    report += (
+                        f"📏 *Площадь объекта:* {data['answers'][0]} м²\n"
+                        f"🚪 *Помещений:* {data['answers'][1]}\n"
+                        f"🔌 *Электроприборы:* {data['answers'][2]}\n"
+                        f"🏢 *Тип здания:* {data['answers'][3]}\n"
+                        f"📝 *Технические требования:* {data['answers'][4]}\n\n"
+                        f"💵 *Расчет стоимости:*\n{data['price_report']}"
+                    )
+                else:
+                    report += (
+                        f"📖 *Тема проекта:* {data['answers'][0]}\n"
+                        f"📄 *Объем работы:* {data['answers'][1]} стр.\n"
+                        f"⏳ *Срок сдачи:* {data['answers'][2]}\n"
+                        f"📚 *Методические требования:* {data['answers'][3]}\n"
+                        f"💡 *Пожелания:* {data['answers'][4]}\n\n"
+                        f"💵 *Расчет стоимости:*\n{data['price_report']}"
+                    )
 
                 await bot.send_message(
                     chat_id=os.getenv("DESIGNER_CHAT_ID"),
@@ -196,7 +290,7 @@ async def process_confirmation(callback: types.CallbackQuery, state: FSMContext)
                     parse_mode="Markdown",
                     reply_markup=contact_button
                 )
-                await callback.message.answer(f"✅ Заявка отправлена! Номер заявки №{request_number}. Спасибо за доверие!")
+                await callback.message.answer(f"✅ Ваша заявка отправлена! Номер заявки №{request_number}. Спасибо за доверие!")
             except Exception as e:
                 logging.error(f"Ошибка при обработке заявки: {e}")
                 await callback.message.answer("⚠️ Произошла ошибка при обработке заявки. Пожалуйста, попробуйте позже.")
