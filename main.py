@@ -31,8 +31,7 @@ REQUEST_COUNTER_FILE = 'request_counter.txt'
 WELCOME_PHRASES = [
     "Снова к нам? Отлично! Давайте новую заявку!",
     "Рады видеть вас снова! Готовы начать?",
-    "Новая заявка - новые возможности! Поехали!",
-    "Готовы создать еще один проект? Вперед!"
+    "Новая заявка - новые возможности! Поехали!"
 ]
 
 # Клавиатуры
@@ -49,11 +48,6 @@ cancel_kb = types.ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-confirm_kb = types.ReplyKeyboardMarkup(
-[[types.KeyboardButton("Подтвердить"), types.KeyboardButton("Отмена")]],
-resize_keyboard=True
-)
-
 new_request_kb = types.ReplyKeyboardMarkup(
     [[types.KeyboardButton("📝 Новая заявка!")]],
     resize_keyboard=True
@@ -65,6 +59,11 @@ building_type_kb = types.ReplyKeyboardMarkup(
         [types.KeyboardButton("Промышленное"), types.KeyboardButton("Другое")]
     ],
     resize_keyboard=True
+)
+
+confirm_kb = types.InlineKeyboardMarkup().row(
+    types.InlineKeyboardButton("✅ Подтвердить", callback_data="confirm_yes"),
+    types.InlineKeyboardButton("❌ Отменить", callback_data="confirm_no")
 )
 
 # Вопросы
@@ -199,11 +198,8 @@ async def cmd_start(message: types.Message):
 
 @dp.message_handler(lambda m: m.text == "📝 Новая заявка!")
 async def new_request(message: types.Message):
-    if random.random() < 0.3:
-        await cmd_start(message)
-    else:
-        await Form.project_type.set()
-        await message.answer(random.choice(WELCOME_PHRASES), reply_markup=project_type_kb)
+    await Form.project_type.set()
+    await message.answer(random.choice(WELCOME_PHRASES), reply_markup=project_type_kb)
 
 @dp.message_handler(state=Form.project_type)
 async def process_type(message: types.Message, state: FSMContext):
@@ -226,6 +222,7 @@ async def process_answers(message: types.Message, state: FSMContext):
         current = data['current_question']
         answer = message.text
 
+        # Валидация для рабочих проектов
         if data['project_type'] == "work":
             if current == 0 and not answer.replace('.', '').isdigit():
                 await message.answer("🔢 Введите число для площади!")
@@ -233,26 +230,23 @@ async def process_answers(message: types.Message, state: FSMContext):
             if current == 1 and not answer.isdigit():
                 await message.answer("🔢 Введите целое число помещений!")
                 return
-            if current == 2:
-                await Form.building_type.set()
-                await message.answer("🏢 Выберите тип здания:", reply_markup=building_type_kb)
-                return
 
+        # Валидация для учебных проектов
         if data['project_type'] == "study" and current == 1 and not answer.isdigit():
             await message.answer("🔢 Введите число страниц!")
             return
 
         data['answers'].append(answer)
 
+        # Переход к выбору типа здания для рабочих проектов
+        if data['project_type'] == "work" and current == 1:
+            await Form.building_type.set()
+            await message.answer("🏢 Выберите тип здания:", reply_markup=building_type_kb)
+            return
+
         if current < len(data['questions']) - 1:
             data['current_question'] += 1
-            next_q = data['questions'][data['current_question']]
-
-            if data['project_type'] == "work" and data['current_question'] == 2:
-                await Form.building_type.set()
-                await message.answer("🏢 Выберите тип здания:", reply_markup=building_type_kb)
-            else:
-                await message.answer(next_q)
+            await message.answer(data['questions'][data['current_question']])
         else:
             if data['project_type'] == "work":
                 data['price_report'] = calculate_work_price(data)
@@ -272,14 +266,16 @@ async def process_building(message: types.Message, state: FSMContext):
         else:
             data['answers'].append(message.text)
             await Form.answers.set()
-            await process_answers(message, state)
+            data['current_question'] += 1  # Важное исправление!
+            await message.answer(data['questions'][data['current_question']])
 
 @dp.message_handler(state=Form.custom_building)
 async def process_custom_building(message: types.Message, state: FSMContext):
     async with state.proxy() as data:
         data['answers'].append(f"Другое ({message.text})")
         await Form.answers.set()
-        await process_answers(message, state)
+        data['current_question'] += 1  # Важное исправление!
+        await message.answer(data['questions'][data['current_question']])
 
 @dp.callback_query_handler(lambda c: c.data in ['confirm_yes', 'confirm_no'], state=Form.confirm)
 async def confirm(callback: types.CallbackQuery, state: FSMContext):
@@ -289,24 +285,27 @@ async def confirm(callback: types.CallbackQuery, state: FSMContext):
                 req_num = get_next_request_number()
                 username = f"@{callback.from_user.username}" if callback.from_user.username else "N/A"
 
-                report = f"📋 *Новая заявка! Номер заявки №{req_num}*\n"
-                report += f"🆔 {callback.from_user.id} | 📧 {username}\n"
+                report = f"📋 *Заявка №{req_num}*\nТип: {'Учебный' if data['project_type'] == 'study' else 'Рабочий'}\n"
+                report += f"🆔 {callback.from_user.id} | 📧 {username}\n\n"
 
                 if data['project_type'] == "work":
                     report += (
-                        f"🏢 {data['answers'][2]}\n"
-                        f"📏 {data['answers'][0]} м² | 🚪 {data['answers'][1]} помещ.\n"
-                        f"💼 Требования: {data['answers'][3]}\n"
-                        f"💵 {data['price_report']}"
+                        f"🏢 Тип здания: {data['answers'][2]}\n"
+                        f"📏 Площадь: {data['answers'][0]} м²\n"
+                        f"🚪 Помещений: {data['answers'][1]}\n"
+                        f"💼 Требования: {data['answers'][3]}\n\n"
+                        f"{data['price_report']}"
                     )
                 else:
                     report += (
-                        f"📖 {data['answers'][0]}\n"
-                        f"📄 {data['answers'][1]} стр. | ⏳ {data['answers'][2]}\n"
-                        f"💡 Пожелания: {data['answers'][3]}\n"
-                        f"💵 {data['price_report']}"
+                        f"📖 Тема: {data['answers'][0]}\n"
+                        f"📄 Объем: {data['answers'][1]} стр.\n"
+                        f"⏳ Срок: {data['answers'][2]}\n"
+                        f"💡 Пожелания: {data['answers'][3]}\n\n"
+                        f"{data['price_report']}"
                     )
 
+                # Отправка сообщения проектировщику
                 await bot.send_message(
                     os.getenv("DESIGNER_CHAT_ID"),
                     report,
@@ -318,14 +317,16 @@ async def confirm(callback: types.CallbackQuery, state: FSMContext):
                         )
                     )
                 )
+
                 await callback.message.answer(
-                    f"✅ Заявка принята! Номер заявки №{req_num} \nОжидайте связи специалиста.",
+                    f"✅ Заявка №{req_num} принята!\nОжидайте связи специалиста.",
                     reply_markup=new_request_kb
                 )
+
             except Exception as e:
-                logging.error(f"Ошибка заявки: {e}")
+                logging.error(f"Ошибка отправки заявки: {str(e)}")
                 await callback.message.answer(
-                    "⚠️ Ошибка обработки. Попробуйте позже.",
+                    "⚠️ Произошла ошибка при отправке заявки. Пожалуйста, попробуйте еще раз.",
                     reply_markup=new_request_kb
                 )
     else:
