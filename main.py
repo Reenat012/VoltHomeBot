@@ -1,6 +1,7 @@
 """
 Главный файл Telegram-бота с интеграцией Webhook для Timeweb
 """
+
 import os
 import logging
 import random
@@ -42,7 +43,7 @@ project_type_kb = types.ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-universal_cancel_kb = types.ReplyKeyboardMarkup(
+cancel_request_kb = types.ReplyKeyboardMarkup(
     [[types.KeyboardButton("Отмена заявки")]],
     resize_keyboard=True
 )
@@ -72,6 +73,7 @@ WORK_QUESTIONS = [
     "Количество помещений:",
     "Особые требования к проекту:"
 ]
+
 STUDY_QUESTIONS = [
     "Укажите тему учебного проекта:",
     "Требуемый объем работы (страниц):",
@@ -197,10 +199,13 @@ def calculate_study_price(data):
         return "❌ Не удалось рассчитать. Менеджер свяжется с вами."
 
 # Обработчики
-@dp.message_handler(lambda message: message.text == "Отмена заявки", state="*")
-async def handle_cancel(message: types.Message, state: FSMContext):
+# Общий обработчик для отмены заявки
+@dp.message_handler(lambda message: message.text == "Отмена заявки", state='*')
+async def cancel_request(message: types.Message, state: FSMContext):
     await state.finish()
-    await cmd_start(message)
+    await message.answer("❌ Заявка отменена", reply_markup=new_request_kb)
+    await Form.project_type.set()
+    await message.answer("Выберите тип проекта:", reply_markup=project_type_kb)
 
 @dp.message_handler(commands=['start', 'help'])
 async def cmd_start(message: types.Message):
@@ -228,7 +233,7 @@ async def process_type(message: types.Message, state: FSMContext):
         data['answers'] = []
 
     await Form.answers.set()
-    await message.answer(data['questions'][0], reply_markup=universal_cancel_kb)
+    await message.answer(data['questions'][0], reply_markup=cancel_request_kb)
 
 @dp.message_handler(state=Form.answers)
 async def process_answers(message: types.Message, state: FSMContext):
@@ -236,23 +241,20 @@ async def process_answers(message: types.Message, state: FSMContext):
         current = data['current_question']
         answer = message.text
 
-        # Валидация для рабочих проектов
         if data['project_type'] == "work":
             if current == 0 and not answer.replace('.', '').isdigit():
-                await message.answer("🔢 Введите число для площади!")
+                await message.answer("🔢 Введите число для площади!", reply_markup=cancel_request_kb)
                 return
             if current == 1 and not answer.isdigit():
-                await message.answer("🔢 Введите целое число помещений!")
+                await message.answer("🔢 Введите целое число помещений!", reply_markup=cancel_request_kb)
                 return
 
-        # Валидация для учебных проектов
         if data['project_type'] == "study" and current == 1 and not answer.isdigit():
-            await message.answer("🔢 Введите число страниц!")
+            await message.answer("🔢 Введите число страниц!", reply_markup=cancel_request_kb)
             return
 
         data['answers'].append(answer)
 
-        # Переход к выбору типа здания для рабочих проектов
         if data['project_type'] == "work" and current == 1:
             await Form.building_type.set()
             await message.answer("🏢 Выберите тип здания:", reply_markup=building_type_kb)
@@ -260,7 +262,7 @@ async def process_answers(message: types.Message, state: FSMContext):
 
         if current < len(data['questions']) - 1:
             data['current_question'] += 1
-            await message.answer(data['questions'][data['current_question']], reply_markup=universal_cancel_kb)
+            await message.answer(data['questions'][data['current_question']], reply_markup=cancel_request_kb)
         else:
             if data['project_type'] == "work":
                 data['price_report'] = calculate_work_price(data)
@@ -276,20 +278,21 @@ async def process_building(message: types.Message, state: FSMContext):
     async with state.proxy() as data:
         if message.text == "Другое":
             await Form.custom_building.set()
-            await message.answer("📝 Введите свой вариант типа здания:", reply_markup=universal_cancel_kb)
+            await message.answer("📝 Введите свой вариант типа здания:", reply_markup=cancel_request_kb)
         else:
             data['answers'].append(message.text)
             await Form.answers.set()
-            data['current_question'] += 1  # Важное исправление!
-            await message.answer(data['questions'][data['current_question']], reply_markup=universal_cancel_kb)
+            data['current_question'] += 1
+            await message.answer(data['questions'][data['current_question']], reply_markup=cancel_request_kb)
 
 @dp.message_handler(state=Form.custom_building)
 async def process_custom_building(message: types.Message, state: FSMContext):
     async with state.proxy() as data:
         data['answers'].append(f"Другое ({message.text})")
         await Form.answers.set()
-        data['current_question'] += 1  # Важное исправление!
-        await message.answer(data['questions'][data['current_question']], reply_markup=universal_cancel_kb)
+        data['current_question'] += 1
+        await message.answer(data['questions'][data['current_question']], reply_markup=cancel_request_kb)
+
 
 @dp.callback_query_handler(lambda c: c.data in ['confirm_yes', 'confirm_no'], state=Form.confirm)
 async def confirm(callback: types.CallbackQuery, state: FSMContext):
@@ -362,7 +365,7 @@ async def confirm(callback: types.CallbackQuery, state: FSMContext):
                     reply_markup=new_request_kb
                 )
     else:
-        await handle_cancel(callback.message, state)
+        await cancel_request(callback.message, state)
 
     await state.finish()
 
