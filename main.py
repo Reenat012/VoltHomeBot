@@ -130,13 +130,18 @@ def get_next_request_number():
 # Расчет стоимости
 def calculate_work_price(data):
     try:
+        if len(data['answers']) < 3:
+            raise ValueError("Недостаточно данных для расчета стоимости рабочего проекта")
+
         area = float(data['answers'][0])
         building = data['answers'][2]
+
         complexity = {
             "Жилое": 1.0,
             "Коммерческое": 1.3,
             "Промышленное": 1.5
         }.get(building.split()[0], 1.2)
+
         if area <= 50:
             price_range = WORK_BASE_PRICES[1]
         elif area <= 100:
@@ -145,8 +150,10 @@ def calculate_work_price(data):
             price_range = WORK_BASE_PRICES[3]
         else:
             price_range = WORK_BASE_PRICES[4]
+
         base_price = (price_range[0] + (price_range[1] or price_range[0]*1.5)) // 2
         total = int(base_price * complexity)
+
         report = [
             "🔧 *Предварительный расчет:*",
             f"- Площадь: {area} м² | Тип: {building}",
@@ -154,19 +161,27 @@ def calculate_work_price(data):
             "_Точная сумма после анализа требований_"
         ]
         return '\n'.join(report).replace(',', ' ')
+    except ValueError as ve:
+        logging.error(f"Ошибка валидации данных: {ve}")
+        return "❌ Не удалось рассчитать стоимость. Проверьте введенные данные."
     except Exception as e:
-        logging.error(f"Ошибка расчета: {e}")
+        logging.error(f"Неожиданная ошибка расчета: {e}")
         return "❌ Не удалось рассчитать стоимость. Специалист свяжется с вами."
 
 def calculate_study_price(data):
     try:
+        if len(data['answers']) < 2:
+            raise ValueError("Недостаточно данных для расчета стоимости учебного проекта")
+
         pages = int(data['answers'][1])
+
         if pages <= 20:
             price = STUDY_BASE_PRICES[1][0]
         elif pages <= 40:
             price = (STUDY_BASE_PRICES[2][0] + STUDY_BASE_PRICES[2][1]) // 2
         else:
             price = STUDY_BASE_PRICES[3][0] * 1.2
+
         report = [
             "📚 *Стоимость учебного проекта:*",
             f"- Тема: {data['answers'][0]}",
@@ -174,8 +189,11 @@ def calculate_study_price(data):
             "_Цена может измениться после уточнения требований_"
         ]
         return '\n'.join(report).replace(',', ' ')
+    except ValueError as ve:
+        logging.error(f"Ошибка валидации данных: {ve}")
+        return "❌ Не удалось рассчитать стоимость. Проверьте введенные данные."
     except Exception as e:
-        logging.error(f"Ошибка расчета: {e}")
+        logging.error(f"Неожиданная ошибка расчета: {e}")
         return "❌ Не удалось рассчитать. Менеджер свяжется с вами."
 
 # Обработчики
@@ -278,12 +296,22 @@ async def confirm(callback: types.CallbackQuery, state: FSMContext):
     if callback.data == 'confirm_yes':
         async with state.proxy() as data:
             try:
+                # Проверка наличия DESIGNER_CHAT_ID
+                designer_chat_id = os.getenv("DESIGNER_CHAT_ID")
+                if not designer_chat_id:
+                    raise ValueError("DESIGNER_CHAT_ID не задан в переменных окружения")
+
                 req_num = get_next_request_number()
                 username = f"@{callback.from_user.username}" if callback.from_user.username else "N/A"
-                report = f"📋 *Заявка №{req_num}\nТип: {'Учебный' if data['project_type'] == 'study' else 'Рабочий'}\n"
+
+                report = f"📋 *Новая заявка! Номер заявки №{req_num}\nТип: {'Учебный' if data['project_type'] == 'study' else 'Рабочий'}\n"
                 report += f"🆔 {callback.from_user.id} | 📧 {username}\n"
 
                 if data['project_type'] == "work":
+                    # Проверка наличия необходимых данных
+                    if len(data['answers']) < 4:
+                        raise ValueError(f"Недостаточно данных в заявке: {data['answers']}")
+
                     report += (
                         f"🏢 Тип здания: {data['answers'][2]}\n"
                         f"📏 Площадь: {data['answers'][0]} м²\n"
@@ -292,6 +320,10 @@ async def confirm(callback: types.CallbackQuery, state: FSMContext):
                         f"{data['price_report']}"
                     )
                 else:
+                    # Проверка наличия необходимых данных
+                    if len(data['answers']) < 4:
+                        raise ValueError(f"Недостаточно данных в заявке: {data['answers']}")
+
                     report += (
                         f"📖 Тема: {data['answers'][0]}\n"
                         f"📄 Объем: {data['answers'][1]} стр.\n"
@@ -302,7 +334,7 @@ async def confirm(callback: types.CallbackQuery, state: FSMContext):
 
                 # Отправка сообщения проектировщику
                 await bot.send_message(
-                    os.getenv("DESIGNER_CHAT_ID"),
+                    designer_chat_id,
                     report,
                     parse_mode="Markdown",
                     reply_markup=types.InlineKeyboardMarkup().add(
@@ -314,11 +346,17 @@ async def confirm(callback: types.CallbackQuery, state: FSMContext):
                 )
 
                 await callback.message.answer(
-                    f"✅ Заявка №{req_num} принята!\nОжидайте связи специалиста.",
+                    f"✅ Ваша заявка принята! Номер заявка №{req_num}. \nОжидайте связи специалиста.",
+                    reply_markup=new_request_kb
+                )
+            except ValueError as ve:
+                logging.error(f"Ошибка валидации данных: {ve}")
+                await callback.message.answer(
+                    "⚠️ Ошибка в данных заявки. Пожалуйста, проверьте введенные данные.",
                     reply_markup=new_request_kb
                 )
             except Exception as e:
-                logging.error(f"Ошибка отправки заявки: {str(e)}")
+                logging.error(f"Ошибка отправки заявки: {str(e)}", exc_info=True)
                 await callback.message.answer(
                     "⚠️ Произошла ошибка при отправке заявки. Пожалуйста, попробуйте еще раз.",
                     reply_markup=new_request_kb
