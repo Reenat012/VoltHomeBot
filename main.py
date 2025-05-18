@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Конфигурация
-WEBHOOK_HOST = os.getenv('WEBHOOK_HOST', 'https://reenat012-volthomebot-2d67.twc1.net')
+WEBHOOK_HOST = os.getenv('WEBHOOK_HOST', 'localhost')
 WEBHOOK_PATH = os.getenv('WEBHOOK_PATH', '/webhook')
 WEBAPP_HOST = os.getenv('WEBAPP_HOST', '0.0.0.0')
 WEBAPP_PORT = int(os.getenv('WEBAPP_PORT', 8000))
@@ -41,6 +41,7 @@ TEXTS = {
         "Профессиональная помощь - путь к правильному решению!"
     ],
     'errors': {
+        'config': "❌ Ошибка конфигурации сервера",
         'counter': "Ошибка счетчика: {}",
         'calculation': "Ошибка расчета: {}",
         'send': "Ошибка отправки: {}"
@@ -149,7 +150,8 @@ def init_request_counter():
 def get_next_request_number():
     try:
         with open(REQUEST_COUNTER_FILE, 'r+') as f:
-            counter = int(f.read().strip() or 0)
+            content = f.read().strip()
+            counter = int(content) if content else 0
             counter += 1
             f.seek(0)
             f.write(str(counter))
@@ -245,24 +247,22 @@ async def process_answers(message: types.Message, state: FSMContext):
         questions = data['questions']
 
         # Валидация ввода
-        validation_errors = {
+        validation_rules = {
             'study': {
                 1: (lambda: not answer.isdigit(), "🔢 Введите число страниц!", KEYBOARDS['cancel']),
-                2: (lambda: answer not in PRICES['study']['urgency'], "Выберите срочность из предложенных:",
-                    KEYBOARDS['urgency'])
+                2: (lambda: answer not in PRICES['study']['urgency'], "Выберите срочность:", KEYBOARDS['urgency'])
             },
             'work': {
-                1: (lambda: answer not in PRICES['work']['object_type'], "Выберите тип объекта из предложенных:",
+                1: (lambda: answer not in PRICES['work']['object_type'], "Выберите тип объекта:",
                     KEYBOARDS['object_type']),
-                2: (lambda: answer not in PRICES['work']['urgency'], "Выберите срочность из предложенных:",
-                    KEYBOARDS['urgency'])
+                2: (lambda: answer not in PRICES['work']['urgency'], "Выберите срочность:", KEYBOARDS['urgency'])
             }
         }
 
-        if current in validation_errors[request_type]:
-            condition, error_text, keyboard = validation_errors[request_type][current]
-            if condition():
-                await message.answer(error_text, reply_markup=keyboard)
+        if current in validation_rules[request_type]:
+            check, error_msg, keyboard = validation_rules[request_type][current]
+            if check():
+                await message.answer(error_msg, reply_markup=keyboard)
                 return
 
         data['answers'].append(answer)
@@ -271,15 +271,11 @@ async def process_answers(message: types.Message, state: FSMContext):
             data['current_question'] += 1
             next_question = questions[data['current_question']]
 
-            # Определение клавиатуры для следующего вопроса
-            keyboard_mapping = {
-                1: {'work': KEYBOARDS['object_type']},
-                2: {True: KEYBOARDS['urgency']}
-            }
-            keyboard = keyboard_mapping.get(data['current_question'], {}).get(
-                request_type if data['current_question'] == 1 else True,
-                KEYBOARDS['cancel']
-            )
+            keyboard = KEYBOARDS['cancel']
+            if data['current_question'] == 1 and request_type == 'work':
+                keyboard = KEYBOARDS['object_type']
+            elif data['current_question'] == 2:
+                keyboard = KEYBOARDS['urgency']
 
             await message.answer(next_question, reply_markup=keyboard)
         else:
@@ -292,28 +288,28 @@ async def process_answers(message: types.Message, state: FSMContext):
 @dp.callback_query_handler(lambda c: c.data in ['confirm_yes', 'confirm_no'], state=Form.confirm)
 async def handle_confirmation(callback: types.CallbackQuery, state: FSMContext):
     try:
-        await callback.answer()  # Важно: подтверждаем callback сразу
+        await callback.answer()
 
         if not SPECIALIST_CHAT_ID:
-            logging.error("SPECIALIST_CHAT_ID не настроен")
-            await callback.message.answer("⚠ Ошибка конфигурации сервера")
+            logging.critical(TEXTS['errors']['config'])
+            await callback.message.answer(TEXTS['errors']['config'])
             return
 
         async with state.proxy() as data:
             if callback.data == 'confirm_yes':
                 req_num = get_next_request_number()
-                username = callback.from_user.username or "N/A"
+                username = f"@{callback.from_user.username}" if callback.from_user.username else "N/A"
 
                 try:
                     cost = data['price_report'].split('Итого: ')[1].split('₽')[0].strip()
                 except Exception as e:
-                    logging.error(f"Ошибка извлечения стоимости: {str(e)}")
+                    logging.error(f"Ошибка извлечения стоимости: {e}")
                     cost = "не определена"
 
                 report = (
                         f"📋 Запрос №{req_num}\n"
                         f"Тип: {'Учебный' if data['request_type'] == 'study' else 'Рабочий'}\n"
-                        f"Пользователь: @{username}\n"
+                        f"Пользователь: {username}\n"
                         f"ID: {callback.from_user.id}\n\n"
                         + "\n".join(f"{q}: {a}" for q, a in zip(data['questions'], data['answers']))
                         + f"\n\nРасчетная стоимость: {cost}₽"
@@ -331,20 +327,20 @@ async def handle_confirmation(callback: types.CallbackQuery, state: FSMContext):
                     )
                 )
 
-                await callback.message.edit_reply_markup(None)  # Удаляем инлайн-кнопки
+                await callback.message.edit_reply_markup()
                 await callback.message.answer(
-                    f"✅ Запрос №{req_num} принят! Ожидайте ответа специалиста.\n"
-                    "⚠️ Помните: консультация не заменяет официальное проектирование.",
+                    f"✅ Запрос №{req_num} принят!\n"
+                    "⚠️ Консультация не заменяет официальное проектирование.",
                     reply_markup=KEYBOARDS['new_request']
                 )
             else:
-                await callback.message.edit_reply_markup(None)
+                await callback.message.edit_reply_markup()
                 await callback.message.answer(
                     "❌ Запрос отменен",
                     reply_markup=KEYBOARDS['new_request']
                 )
     except Exception as e:
-        logging.error(f"Ошибка обработки подтверждения: {str(e)}")
+        logging.error(f"Ошибка обработки подтверждения: {e}")
         await callback.message.answer("⚠ Произошла ошибка, попробуйте позже")
     finally:
         await state.finish()
@@ -353,6 +349,11 @@ async def handle_confirmation(callback: types.CallbackQuery, state: FSMContext):
 async def on_startup(dp):
     init_request_counter()
     await bot.set_webhook(WEBHOOK_URL)
+
+    # Проверка конфигурации
+    if not SPECIALIST_CHAT_ID:
+        logging.critical("SPECIALIST_CHAT_ID не задан в переменных окружения!")
+
     logging.info("Бот запущен")
 
 
