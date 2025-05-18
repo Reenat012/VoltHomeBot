@@ -5,17 +5,9 @@ from aiogram import Bot, Dispatcher, types, executor
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
-from aiogram.utils.executor import start_webhook
 from dotenv import load_dotenv
 
 load_dotenv()
-
-# Конфигурация
-WEBHOOK_HOST = os.getenv('WEBHOOK_HOST', 'localhost')
-WEBHOOK_PATH = os.getenv('WEBHOOK_PATH', '/webhook')
-WEBAPP_HOST = os.getenv('WEBAPP_HOST', '0.0.0.0')
-WEBAPP_PORT = int(os.getenv('WEBAPP_PORT', 8000))
-WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 
 # Инициализация бота
 bot = Bot(token=os.getenv("BOT_TOKEN"))
@@ -67,7 +59,7 @@ TEXTS = {
 
 
 # Клавиатуры
-def create_keyboard(buttons, row_width=2):
+def create_reply_keyboard(buttons, row_width=2):
     return types.ReplyKeyboardMarkup(
         [[types.KeyboardButton(btn) for btn in row] for row in buttons],
         resize_keyboard=True
@@ -75,14 +67,14 @@ def create_keyboard(buttons, row_width=2):
 
 
 KEYBOARDS = {
-    'request_type': create_keyboard([["📚 Учебный вопрос", "🏗️ Рабочий вопрос"]]),
-    'cancel': create_keyboard([["Отмена запроса"]]),
-    'new_request': create_keyboard([["📝 Новый запрос!"]]),
-    'urgency': create_keyboard([
+    'main': create_reply_keyboard([["📚 Учебный вопрос", "🏗️ Рабочий вопрос"]]),
+    'cancel': create_reply_keyboard([["Отмена запроса"]]),
+    'new_request': create_reply_keyboard([["📝 Новый запрос!"]]),
+    'urgency': create_reply_keyboard([
         ["Срочно (24ч)", "3-5 дней"],
         ["Стандартно (7 дней)", "Отмена запроса"]
     ]),
-    'object_type': create_keyboard([
+    'object_type': create_reply_keyboard([
         ["Жилой дом", "Квартира"],
         ["Коммерческое помещение", "Другое"],
         ["Отмена запроса"]
@@ -209,14 +201,14 @@ async def cmd_start(message: types.Message):
     await Form.request_type.set()
     await message.answer(
         "👨💻 Добро пожаловать в сервис технических консультаций!\nВыберите тип запроса:",
-        reply_markup=KEYBOARDS['request_type']
+        reply_markup=KEYBOARDS['main']
     )
 
 
 @dp.message_handler(lambda m: m.text == "📝 Новый запрос!")
 async def new_request(message: types.Message):
     await Form.request_type.set()
-    await message.answer(random.choice(TEXTS['welcome']), reply_markup=KEYBOARDS['request_type'])
+    await message.answer(random.choice(TEXTS['welcome']), reply_markup=KEYBOARDS['main'])
 
 
 @dp.message_handler(state=Form.request_type)
@@ -328,17 +320,14 @@ async def handle_confirmation(callback: types.CallbackQuery, state: FSMContext):
                 )
 
                 await callback.message.edit_reply_markup()
-                await callback.message.answer(
+                success_msg = (
                     f"✅ Запрос №{req_num} принят!\n"
-                    "⚠️ Консультация не заменяет официальное проектирование.",
-                    reply_markup=KEYBOARDS['new_request']
+                    "⚠️ Консультация не заменяет официальное проектирование."
                 )
+                await callback.message.answer(success_msg, reply_markup=KEYBOARDS['new_request'])
             else:
                 await callback.message.edit_reply_markup()
-                await callback.message.answer(
-                    "❌ Запрос отменен",
-                    reply_markup=KEYBOARDS['new_request']
-                )
+                await callback.message.answer("❌ Запрос отменен", reply_markup=KEYBOARDS['new_request'])
     except Exception as e:
         logging.error(f"Ошибка обработки подтверждения: {e}")
         await callback.message.answer("⚠ Произошла ошибка, попробуйте позже")
@@ -348,17 +337,12 @@ async def handle_confirmation(callback: types.CallbackQuery, state: FSMContext):
 
 async def on_startup(dp):
     init_request_counter()
-    await bot.set_webhook(WEBHOOK_URL)
-
-    # Проверка конфигурации
     if not SPECIALIST_CHAT_ID:
         logging.critical("SPECIALIST_CHAT_ID не задан в переменных окружения!")
-
     logging.info("Бот запущен")
 
 
 async def on_shutdown(dp):
-    await bot.delete_webhook()
     await dp.storage.close()
     logging.info("Бот остановлен")
 
@@ -368,11 +352,4 @@ if __name__ == '__main__':
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
-    start_webhook(
-        dispatcher=dp,
-        webhook_path=WEBHOOK_PATH,
-        on_startup=on_startup,
-        on_shutdown=on_shutdown,
-        host=WEBAPP_HOST,
-        port=WEBAPP_PORT
-    )
+    executor.start_polling(dp, skip_updates=True, on_startup=on_startup, on_shutdown=on_shutdown)
