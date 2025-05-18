@@ -9,6 +9,20 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# После load_dotenv()
+SPECIALIST_CHAT_ID = os.getenv("SPECIALIST_CHAT_ID")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN:
+    logging.critical("❌ BOT_TOKEN не найден в .env!")
+    exit(1)
+
+if not SPECIALIST_CHAT_ID:
+    logging.critical("❌ SPECIALIST_CHAT_ID не задан!")
+    exit(1)
+
+logging.info(f"Загружен токен: {BOT_TOKEN[:5]}...")
+logging.info(f"SPECIALIST_CHAT_ID: {SPECIALIST_CHAT_ID}")
+
 # Инициализация бота
 bot = Bot(token=os.getenv("BOT_TOKEN"))
 storage = MemoryStorage()
@@ -335,21 +349,20 @@ async def handle_confirmation(callback: types.CallbackQuery, state: FSMContext):
         await state.finish()
 
 
-async def on_startup(dp):
-    init_request_counter()
-    if not SPECIALIST_CHAT_ID:
-        logging.critical("SPECIALIST_CHAT_ID не задан в переменных окружения!")
-    logging.info("Бот запущен")
-
-
 async def on_shutdown(dp):
     await dp.storage.close()
     logging.info("Бот остановлен")
 
 
+async def on_startup(dp):
+    await bot.delete_webhook()  # Добавьте эту строку!
+    init_request_counter()
+    logging.info("Бот запущен")  # Убрали проверку SPECIALIST_CHAT_ID
+
+
+# Замените блок запуска бота в конце файла:
 if __name__ == '__main__':
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
-    executor.start_polling(dp, skip_updates=True, on_startup=on_startup, on_shutdown=on_shutdown)
