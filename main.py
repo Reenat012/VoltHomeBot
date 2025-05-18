@@ -7,11 +7,13 @@ from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
 from dotenv import load_dotenv
 
+# Инициализация окружения
 load_dotenv()
 
-# После load_dotenv()
-SPECIALIST_CHAT_ID = os.getenv("SPECIALIST_CHAT_ID")
+# Загрузка и проверка переменных окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+SPECIALIST_CHAT_ID = os.getenv("SPECIALIST_CHAT_ID")
+
 if not BOT_TOKEN:
     logging.critical("❌ BOT_TOKEN не найден в .env!")
     exit(1)
@@ -21,23 +23,20 @@ if not SPECIALIST_CHAT_ID:
     exit(1)
 
 logging.info(f"Загружен токен: {BOT_TOKEN[:5]}...")
-logging.info(f"SPECIALIST_CHAT_ID: {SPECIALIST_CHAT_ID}")
+logging.info(f"ID чата специалиста: {SPECIALIST_CHAT_ID}")
 
 # Инициализация бота
-bot = Bot(token=os.getenv("BOT_TOKEN"))
+bot = Bot(token=BOT_TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(bot, storage=storage)
 
 # Константы
 REQUEST_COUNTER_FILE = 'request_counter.txt'
-SPECIALIST_CHAT_ID = os.getenv("SPECIALIST_CHAT_ID")
-
 
 class Form(StatesGroup):
     request_type = State()
     answers = State()
     confirm = State()
-
 
 # Текстовые ресурсы
 TEXTS = {
@@ -71,14 +70,12 @@ TEXTS = {
     }
 }
 
-
 # Клавиатуры
 def create_reply_keyboard(buttons, row_width=2):
     return types.ReplyKeyboardMarkup(
         [[types.KeyboardButton(btn) for btn in row] for row in buttons],
         resize_keyboard=True
     )
-
 
 KEYBOARDS = {
     'main': create_reply_keyboard([["📚 Учебный вопрос", "🏗️ Рабочий вопрос"]]),
@@ -142,7 +139,6 @@ PRICES = {
     }
 }
 
-
 def init_request_counter():
     try:
         if not os.path.exists(REQUEST_COUNTER_FILE):
@@ -151,7 +147,6 @@ def init_request_counter():
             logging.info("Счетчик запросов инициализирован")
     except Exception as e:
         logging.error(TEXTS['errors']['counter'].format(e))
-
 
 def get_next_request_number():
     try:
@@ -165,7 +160,6 @@ def get_next_request_number():
     except Exception as e:
         logging.error(TEXTS['errors']['counter'].format(e))
         return random.randint(1000, 9999)
-
 
 async def generate_price_report(request_type, data):
     try:
@@ -203,12 +197,10 @@ async def generate_price_report(request_type, data):
         logging.error(TEXTS['errors']['calculation'].format(e))
         return "❌ Не удалось рассчитать стоимость. Специалист свяжется с вами."
 
-
 @dp.message_handler(lambda message: message.text == "Отмена запроса", state='*')
 async def cancel_request(message: types.Message, state: FSMContext):
     await state.finish()
     await message.answer("❌ Запрос отменен", reply_markup=KEYBOARDS['new_request'])
-
 
 @dp.message_handler(commands=['start', 'help'])
 async def cmd_start(message: types.Message):
@@ -218,12 +210,10 @@ async def cmd_start(message: types.Message):
         reply_markup=KEYBOARDS['main']
     )
 
-
 @dp.message_handler(lambda m: m.text == "📝 Новый запрос!")
 async def new_request(message: types.Message):
     await Form.request_type.set()
     await message.answer(random.choice(TEXTS['welcome']), reply_markup=KEYBOARDS['main'])
-
 
 @dp.message_handler(state=Form.request_type)
 async def process_type(message: types.Message, state: FSMContext):
@@ -242,7 +232,6 @@ async def process_type(message: types.Message, state: FSMContext):
 
     await Form.answers.set()
     await message.answer(data['questions'][0], reply_markup=KEYBOARDS['cancel'])
-
 
 @dp.message_handler(state=Form.answers)
 async def process_answers(message: types.Message, state: FSMContext):
@@ -290,16 +279,10 @@ async def process_answers(message: types.Message, state: FSMContext):
             await message.answer(data['price_report'], parse_mode="Markdown")
             await message.answer("Подтвердить запрос?", reply_markup=confirm_kb)
 
-
 @dp.callback_query_handler(lambda c: c.data in ['confirm_yes', 'confirm_no'], state=Form.confirm)
 async def handle_confirmation(callback: types.CallbackQuery, state: FSMContext):
     try:
         await callback.answer()
-
-        if not SPECIALIST_CHAT_ID:
-            logging.critical(TEXTS['errors']['config'])
-            await callback.message.answer(TEXTS['errors']['config'])
-            return
 
         async with state.proxy() as data:
             if callback.data == 'confirm_yes':
@@ -313,12 +296,12 @@ async def handle_confirmation(callback: types.CallbackQuery, state: FSMContext):
                     cost = "не определена"
 
                 report = (
-                        f"📋 Запрос №{req_num}\n"
-                        f"Тип: {'Учебный' if data['request_type'] == 'study' else 'Рабочий'}\n"
-                        f"Пользователь: {username}\n"
-                        f"ID: {callback.from_user.id}\n\n"
-                        + "\n".join(f"{q}: {a}" for q, a in zip(data['questions'], data['answers']))
-                        + f"\n\nРасчетная стоимость: {cost}₽"
+                    f"📋 Запрос №{req_num}\n"
+                    f"Тип: {'Учебный' if data['request_type'] == 'study' else 'Рабочий'}\n"
+                    f"Пользователь: {username}\n"
+                    f"ID: {callback.from_user.id}\n\n"
+                    + "\n".join(f"{q}: {a}" for q, a in zip(data['questions'], data['answers']))
+                    + f"\n\nРасчетная стоимость: {cost}₽"
                 )
 
                 await bot.send_message(
@@ -348,21 +331,23 @@ async def handle_confirmation(callback: types.CallbackQuery, state: FSMContext):
     finally:
         await state.finish()
 
-
 async def on_shutdown(dp):
     await dp.storage.close()
     logging.info("Бот остановлен")
 
-
 async def on_startup(dp):
-    await bot.delete_webhook()  # Добавьте эту строку!
+    await bot.delete_webhook()
     init_request_counter()
-    logging.info("Бот запущен")  # Убрали проверку SPECIALIST_CHAT_ID
+    logging.info("Бот запущен")
 
-
-# Замените блок запуска бота в конце файла:
 if __name__ == '__main__':
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    executor.start_polling(
+        dp,
+        skip_updates=True,
+        on_startup=on_startup,
+        on_shutdown=on_shutdown
     )
