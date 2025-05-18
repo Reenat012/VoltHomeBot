@@ -281,58 +281,72 @@ async def process_answers(message: types.Message, state: FSMContext):
 
 @dp.callback_query_handler(lambda c: c.data in ['confirm_yes', 'confirm_no'], state=Form.confirm)
 async def confirm(callback: types.CallbackQuery, state: FSMContext):
-    if not SPECIALIST_CHAT_ID:
-        logging.error("Не задан SPECIALIST_CHAT_ID в переменных окружения")
-        return
+    try:
+        if not SPECIALIST_CHAT_ID:
+            logging.error("Не задан SPECIALIST_CHAT_ID в переменных окружения")
+            await callback.answer("Ошибка конфигурации бота")
+            return
 
-    async with state.proxy() as data:
-        if callback.data == 'confirm_yes':
-            try:
-                req_num = get_next_request_number()
-                username = f"@{callback.from_user.username}" if callback.from_user.username else "N/A"
-                report = (
-                        f"📋 Новый запрос №{req_num}\n"
-                        f"Тип: {'Учебный' if data['request_type'] == 'study' else 'Рабочий'}\n"
-                        f"Клиент: {username}\nID: {callback.from_user.id}\n\n"
-                        + '\n'.join(f"{q}: {a}" for q, a in zip(data['questions'], data['answers']))
-                        + f"\n\nРасчетная стоимость: {data['price_report'].split('Итого: ')[1].split('₽')[0].strip()}₽"
-                )
+        async with state.proxy() as data:
+            if callback.data == 'confirm_yes':
+                try:
+                    req_num = get_next_request_number()
+                    username = f"@{callback.from_user.username}" if callback.from_user.username else "N/A"
 
-                await bot.send_message(
-                    chat_id=SPECIALIST_CHAT_ID,
-                    text=report,
-                    parse_mode="Markdown",
-                    reply_markup=types.InlineKeyboardMarkup().add(
-                        types.InlineKeyboardButton(
-                            "💬 Связаться с клиентом",
-                            url=f"tg://user?id={callback.from_user.id}"
+                    # Формируем отчет безопасным способом
+                    try:
+                        cost_part = data['price_report'].split('Итого: ')[1].split('₽')[0].strip()
+                    except Exception as e:
+                        logging.error(f"Ошибка парсинга стоимости: {str(e)}")
+                        cost_part = "не определена"
+
+                    report = (
+                            f"📋 Новый запрос №{req_num}\n"
+                            f"Тип: {'Учебный' if data['request_type'] == 'study' else 'Рабочий'}\n"
+                            f"Клиент: {username}\nID: {callback.from_user.id}\n\n"
+                            + '\n'.join(f"{q}: {a}" for q, a in zip(data['questions'], data['answers']))
+                            + f"\n\nРасчетная стоимость: {cost_part}₽"
+                    )
+
+                    await bot.send_message(
+                        chat_id=SPECIALIST_CHAT_ID,
+                        text=report,
+                        parse_mode="Markdown",
+                        reply_markup=types.InlineKeyboardMarkup().add(
+                            types.InlineKeyboardButton(
+                                "💬 Связаться с клиентом",
+                                url=f"tg://user?id={callback.from_user.id}"
+                            )
                         )
                     )
-                )
 
-                disclaimer = (
-                    "\n\n⚠️ *Важно:* Консультация не заменяет официальное проектирование. "
-                    "Для реализации работ требуется привлечение лицензированных организаций."
-                )
+                    disclaimer = (
+                        "\n\n⚠️ *Важно:* Консультация не заменяет официальное проектирование. "
+                        "Для реализации работ требуется привлечение лицензированных организаций."
+                    )
 
+                    await callback.message.edit_reply_markup()  # Удаляем инлайн-клавиатуру
+                    await callback.message.answer(
+                        f"✅ Ваш запрос №{req_num} принят! Ожидайте связи специалиста.{disclaimer}",
+                        reply_markup=KEYBOARDS['new_request'],
+                        parse_mode="Markdown"
+                    )
+
+                except Exception as e:
+                    logging.error(TEXTS['errors']['send'].format(e))
+                    await callback.message.answer(
+                        "⚠️ Ошибка при отправке. Попробуйте снова.",
+                        reply_markup=KEYBOARDS['new_request']
+                    )
+            else:
+                await callback.message.edit_reply_markup()  # Удаляем инлайн-клавиатуру
                 await callback.message.answer(
-                    f"✅ Ваш запрос №{req_num} принят! Ожидайте связи специалиста.{disclaimer}",
-                    reply_markup=KEYBOARDS['new_request'],
-                    parse_mode="Markdown"
-                )
-            except Exception as e:
-                logging.error(TEXTS['errors']['send'].format(e))
-                await callback.message.answer(
-                    "⚠️ Ошибка при отправке. Попробуйте снова.",
+                    "❌ Запрос отменен.",
                     reply_markup=KEYBOARDS['new_request']
                 )
-        else:
-            await callback.message.answer(
-                "❌ Запрос отменен.",
-                reply_markup=KEYBOARDS['new_request']
-            )
-    await state.finish()
-
+    finally:
+        await state.finish()  # Гарантированное завершение состояния
+    await callback.answer()  # Подтверждаем обработку callback
 
 async def on_startup(dp):
     init_request_counter()
