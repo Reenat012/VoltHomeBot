@@ -88,7 +88,6 @@ KEYBOARDS = {
     ])
 }
 
-# Inline клавиатура подтверждения
 confirm_kb = types.InlineKeyboardMarkup().row(
     types.InlineKeyboardButton("✅ Подтвердить", callback_data="confirm_yes"),
     types.InlineKeyboardButton("❌ Отменить", callback_data="confirm_no")
@@ -182,16 +181,14 @@ async def generate_price_report(request_type, data):
         else:
             object_type = answers[1]
             urgency = answers[2]
-            object_coeff = params['object_type'].get(object_type, 1.0)
-            urgency_coeff = params['urgency'].get(urgency, 1.0)
-            total = params['base'] * object_coeff * urgency_coeff
+            total = params['base'] * params['object_type'].get(object_type, 1.0) * params['urgency'].get(urgency, 1.0)
 
             return '\n'.join(TEXTS['price_templates']['work']).format(
                 base=params['base'],
                 object_type=object_type,
-                object_coeff=object_coeff,
+                object_coeff=params['object_type'].get(object_type, 1.0),
                 urgency=urgency,
-                urgency_coeff=urgency_coeff,
+                urgency_coeff=params['urgency'].get(urgency, 1.0),
                 total=int(total)
             )
     except Exception as e:
@@ -248,17 +245,25 @@ async def process_answers(message: types.Message, state: FSMContext):
         questions = data['questions']
 
         # Валидация ввода
-        if current == 1 and request_type == 'study' and not answer.isdigit():
-            await message.answer("🔢 Введите число страниц!", reply_markup=KEYBOARDS['cancel'])
-            return
+        validation_errors = {
+            'study': {
+                1: (lambda: not answer.isdigit(), "🔢 Введите число страниц!", KEYBOARDS['cancel']),
+                2: (lambda: answer not in PRICES['study']['urgency'], "Выберите срочность из предложенных:",
+                    KEYBOARDS['urgency'])
+            },
+            'work': {
+                1: (lambda: answer not in PRICES['work']['object_type'], "Выберите тип объекта из предложенных:",
+                    KEYBOARDS['object_type']),
+                2: (lambda: answer not in PRICES['work']['urgency'], "Выберите срочность из предложенных:",
+                    KEYBOARDS['urgency'])
+            }
+        }
 
-        if current == 2 and answer not in ["Срочно (24ч)", "3-5 дней", "Стандартно (7 дней)"]:
-            await message.answer("Выберите срочность из предложенных:", reply_markup=KEYBOARDS['urgency'])
-            return
-
-        if current == 1 and request_type == 'work' and answer not in PRICES['work']['object_type']:
-            await message.answer("Выберите тип объекта из предложенных:", reply_markup=KEYBOARDS['object_type'])
-            return
+        if current in validation_errors[request_type]:
+            condition, error_text, keyboard = validation_errors[request_type][current]
+            if condition():
+                await message.answer(error_text, reply_markup=keyboard)
+                return
 
         data['answers'].append(answer)
 
@@ -266,12 +271,17 @@ async def process_answers(message: types.Message, state: FSMContext):
             data['current_question'] += 1
             next_question = questions[data['current_question']]
 
-            if data['current_question'] == 2:
-                await message.answer(next_question, reply_markup=KEYBOARDS['urgency'])
-            elif data['current_question'] == 1 and request_type == 'work':
-                await message.answer(next_question, reply_markup=KEYBOARDS['object_type'])
-            else:
-                await message.answer(next_question, reply_markup=KEYBOARDS['cancel'])
+            # Определение клавиатуры для следующего вопроса
+            keyboard_mapping = {
+                1: {'work': KEYBOARDS['object_type']},
+                2: {True: KEYBOARDS['urgency']}
+            }
+            keyboard = keyboard_mapping.get(data['current_question'], {}).get(
+                request_type if data['current_question'] == 1 else True,
+                KEYBOARDS['cancel']
+            )
+
+            await message.answer(next_question, reply_markup=keyboard)
         else:
             data['price_report'] = await generate_price_report(request_type, data)
             await Form.confirm.set()
@@ -280,73 +290,65 @@ async def process_answers(message: types.Message, state: FSMContext):
 
 
 @dp.callback_query_handler(lambda c: c.data in ['confirm_yes', 'confirm_no'], state=Form.confirm)
-async def confirm(callback: types.CallbackQuery, state: FSMContext):
+async def handle_confirmation(callback: types.CallbackQuery, state: FSMContext):
     try:
+        await callback.answer()  # Важно: подтверждаем callback сразу
+
         if not SPECIALIST_CHAT_ID:
-            logging.error("Не задан SPECIALIST_CHAT_ID в переменных окружения")
-            await callback.answer("Ошибка конфигурации бота")
+            logging.error("SPECIALIST_CHAT_ID не настроен")
+            await callback.message.answer("⚠ Ошибка конфигурации сервера")
             return
 
         async with state.proxy() as data:
             if callback.data == 'confirm_yes':
+                req_num = get_next_request_number()
+                username = callback.from_user.username or "N/A"
+
                 try:
-                    req_num = get_next_request_number()
-                    username = f"@{callback.from_user.username}" if callback.from_user.username else "N/A"
+                    cost = data['price_report'].split('Итого: ')[1].split('₽')[0].strip()
+                except Exception as e:
+                    logging.error(f"Ошибка извлечения стоимости: {str(e)}")
+                    cost = "не определена"
 
-                    # Формируем отчет безопасным способом
-                    try:
-                        cost_part = data['price_report'].split('Итого: ')[1].split('₽')[0].strip()
-                    except Exception as e:
-                        logging.error(f"Ошибка парсинга стоимости: {str(e)}")
-                        cost_part = "не определена"
+                report = (
+                        f"📋 Запрос №{req_num}\n"
+                        f"Тип: {'Учебный' if data['request_type'] == 'study' else 'Рабочий'}\n"
+                        f"Пользователь: @{username}\n"
+                        f"ID: {callback.from_user.id}\n\n"
+                        + "\n".join(f"{q}: {a}" for q, a in zip(data['questions'], data['answers']))
+                        + f"\n\nРасчетная стоимость: {cost}₽"
+                )
 
-                    report = (
-                            f"📋 Новый запрос №{req_num}\n"
-                            f"Тип: {'Учебный' if data['request_type'] == 'study' else 'Рабочий'}\n"
-                            f"Клиент: {username}\nID: {callback.from_user.id}\n\n"
-                            + '\n'.join(f"{q}: {a}" for q, a in zip(data['questions'], data['answers']))
-                            + f"\n\nРасчетная стоимость: {cost_part}₽"
-                    )
-
-                    await bot.send_message(
-                        chat_id=SPECIALIST_CHAT_ID,
-                        text=report,
-                        parse_mode="Markdown",
-                        reply_markup=types.InlineKeyboardMarkup().add(
-                            types.InlineKeyboardButton(
-                                "💬 Связаться с клиентом",
-                                url=f"tg://user?id={callback.from_user.id}"
-                            )
+                await bot.send_message(
+                    chat_id=SPECIALIST_CHAT_ID,
+                    text=report,
+                    parse_mode="Markdown",
+                    reply_markup=types.InlineKeyboardMarkup().add(
+                        types.InlineKeyboardButton(
+                            "💬 Связаться",
+                            url=f"tg://user?id={callback.from_user.id}"
                         )
                     )
+                )
 
-                    disclaimer = (
-                        "\n\n⚠️ *Важно:* Консультация не заменяет официальное проектирование. "
-                        "Для реализации работ требуется привлечение лицензированных организаций."
-                    )
-
-                    await callback.message.edit_reply_markup()  # Удаляем инлайн-клавиатуру
-                    await callback.message.answer(
-                        f"✅ Ваш запрос №{req_num} принят! Ожидайте связи специалиста.{disclaimer}",
-                        reply_markup=KEYBOARDS['new_request'],
-                        parse_mode="Markdown"
-                    )
-
-                except Exception as e:
-                    logging.error(TEXTS['errors']['send'].format(e))
-                    await callback.message.answer(
-                        "⚠️ Ошибка при отправке. Попробуйте снова.",
-                        reply_markup=KEYBOARDS['new_request']
-                    )
-            else:
-                await callback.message.edit_reply_markup()  # Удаляем инлайн-клавиатуру
+                await callback.message.edit_reply_markup(None)  # Удаляем инлайн-кнопки
                 await callback.message.answer(
-                    "❌ Запрос отменен.",
+                    f"✅ Запрос №{req_num} принят! Ожидайте ответа специалиста.\n"
+                    "⚠️ Помните: консультация не заменяет официальное проектирование.",
                     reply_markup=KEYBOARDS['new_request']
                 )
+            else:
+                await callback.message.edit_reply_markup(None)
+                await callback.message.answer(
+                    "❌ Запрос отменен",
+                    reply_markup=KEYBOARDS['new_request']
+                )
+    except Exception as e:
+        logging.error(f"Ошибка обработки подтверждения: {str(e)}")
+        await callback.message.answer("⚠ Произошла ошибка, попробуйте позже")
     finally:
-        await state.finish()  # Гарантированное завершение состояния
-    await callback.answer()  # Подтверждаем обработку callback
+        await state.finish()
+
 
 async def on_startup(dp):
     init_request_counter()
