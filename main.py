@@ -8,7 +8,6 @@ from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from dotenv import load_dotenv
 import aiofiles
-import asyncio
 
 # Настройка логирования
 logging.basicConfig(
@@ -35,7 +34,7 @@ class Config:
 
 Config.validate()
 
-# Инициализация бота с локальным хранилищем состояний
+# Инициализация бота
 bot = Bot(token=Config.BOT_TOKEN, parse_mode="HTML")
 storage = MemoryStorage()
 dp = Dispatcher(bot, storage=storage)
@@ -44,7 +43,7 @@ dp = Dispatcher(bot, storage=storage)
 REQUEST_COUNTER_FILE = 'request_counter.txt'
 
 
-# Предварительно созданные клавиатуры
+# Клавиатуры
 class Keyboards:
     @staticmethod
     def create_reply(buttons):
@@ -79,7 +78,7 @@ class Form(StatesGroup):
     confirm = State()
 
 
-# Оптимизированные текстовые шаблоны
+# Шаблоны ответов
 class Templates:
     WELCOME = [
         "Снова к нам? Отлично! Новый запрос - новые решения!",
@@ -105,7 +104,7 @@ class Templates:
                     f"➔ <b>Итого: {int(total)}₽</b>\n"
                     "<i>Цена окончательно согласовывается с исполнителем</i>"
                 )
-            except (ValueError, IndexError) as e:
+            except (ValueError, IndexError, KeyError) as e:
                 logger.error(f"Ошибка расчета стоимости учебного вопроса: {e}")
                 return "❌ Не удалось рассчитать стоимость. Пожалуйста, повторите попытку."
 
@@ -122,12 +121,12 @@ class Templates:
                     f"➔ <b>Итого: {int(total)}₽</b>\n"
                     "<i>Окончательная сумма может быть скорректирована</i>"
                 )
-            except IndexError as e:
+            except (IndexError, KeyError) as e:
                 logger.error(f"Ошибка расчета стоимости рабочего вопроса: {e}")
                 return "❌ Не удалось рассчитать стоимость. Пожалуйста, повторите попытку."
 
 
-# Оптимизированная структура данных для цен
+# Структура цен
 PRICES = {
     'study': {
         'base': 800,
@@ -154,7 +153,7 @@ PRICES = {
 }
 
 
-# Асинхронный счетчик запросов
+# Счетчик запросов
 async def get_next_request_number() -> int:
     try:
         async with aiofiles.open(REQUEST_COUNTER_FILE, 'r+') as f:
@@ -170,7 +169,7 @@ async def get_next_request_number() -> int:
         return random.randint(1000, 9999)
 
 
-# Оптимизированные обработчики
+# Обработчики
 @dp.message_handler(commands=['start', 'help'])
 async def cmd_start(message: types.Message):
     await Form.request_type.set()
@@ -215,7 +214,7 @@ async def process_answers(message: types.Message, state: FSMContext):
     request_type = data['request_type']
     answer = message.text
 
-    # Быстрая валидация через словарь
+    # Валидация
     validation_map = {
         'study': {
             1: (lambda a: not a.isdigit(), "🔢 Введите число страниц!", Keyboards.CANCEL),
@@ -252,7 +251,6 @@ async def process_answers(message: types.Message, state: FSMContext):
         await state.update_data(price_report=price_report)
         await Form.confirm.set()
 
-        # Разделяем отправку сообщений для корректного форматирования
         await message.answer(price_report, parse_mode="HTML")
         await message.answer("Подтвердить запрос?", reply_markup=Keyboards.CONFIRM)
 
@@ -292,7 +290,6 @@ async def handle_confirmation(callback: types.CallbackQuery, state: FSMContext):
 
 async def generate_report(user: types.User, data: dict, request_number: int) -> str:
     try:
-        # Используем отдельное поле для стоимости
         cost_str = data.get('price_report', '').split('Итого: ')[1].split('₽')[0].strip()
         cost = int(cost_str)
     except (IndexError, ValueError, TypeError) as e:
