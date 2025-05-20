@@ -8,9 +8,8 @@ from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from dotenv import load_dotenv
 import aiofiles
-import asyncio
 
-# Настройка расширенного логирования
+# Расширенное логирование с уровнем DEBUG
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s [%(levelname)s] %(name)s - %(funcName)s: %(message)s',
@@ -182,8 +181,6 @@ async def get_next_request_number() -> int:
             await f.seek(0)
             await f.truncate()
             await f.write(str(counter))
-            logger.debug(f"Новый номер запроса: {counter}")
-
             return counter
 
     except Exception as e:
@@ -249,7 +246,7 @@ async def process_answers(message: types.Message, state: FSMContext):
     # Валидация данных
     validation_map = {
         'study': {
-            1: (lambda a: not a.isdigit(), "🔢 Введите число страниц!", Keyboards.CANCEL),
+            1: (lambda a: not (a.isdigit() and int(a) > 0), "🔢 Введите положительное число страниц!", Keyboards.CANCEL),
             2: (lambda a: a not in PRICES['study']['urgency'], "Выберите срочность:", Keyboards.URGENCY)
         },
         'work': {
