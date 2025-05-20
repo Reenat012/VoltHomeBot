@@ -2,12 +2,13 @@ import os
 import logging
 import random
 from aiogram import Bot, Dispatcher, types, executor
-from aiogram.contrib.fsm_storage.redis import RedisStorage2  # Более производительное хранилище
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters import Text
 from aiogram.dispatcher.filters.state import State, StatesGroup
+from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from dotenv import load_dotenv
-import aiofiles  # Асинхронная работа с файлами
+import aiofiles
+import asyncio
 
 # Настройка логирования
 logging.basicConfig(
@@ -24,7 +25,6 @@ load_dotenv()
 class Config:
     BOT_TOKEN = os.getenv("BOT_TOKEN")
     SPECIALIST_CHAT_ID = os.getenv("SPECIALIST_CHAT_ID")
-    REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
     @classmethod
     def validate(cls):
@@ -35,9 +35,9 @@ class Config:
 
 Config.validate()
 
-# Инициализация бота с кэшированием
+# Инициализация бота с локальным хранилищем состояний
 bot = Bot(token=Config.BOT_TOKEN, parse_mode="HTML")
-storage = RedisStorage2.from_url(Config.REDIS_URL)  # Используем Redis для состояний
+storage = MemoryStorage()
 dp = Dispatcher(bot, storage=storage)
 
 # Константы
@@ -54,26 +54,25 @@ class Keyboards:
             one_time_keyboard=True
         )
 
-    MAIN = create_reply.__func__([["📚 Учебный вопрос", "🏗️ Рабочий вопрос"]])
-    CANCEL = create_reply.__func__([["Отмена запроса"]])
-    NEW_REQUEST = create_reply.__func__([["📝 Новый запрос!"]])
-    URGENCY = create_reply.__func__([
+    MAIN = create_reply([["📚 Учебный вопрос", "🏗️ Рабочий вопрос"]])
+    CANCEL = create_reply([["Отмена запроса"]])
+    NEW_REQUEST = create_reply([["📝 Новый запрос!"]])
+    URGENCY = create_reply([
         ["Срочно (24ч)", "3-5 дней"],
         ["Стандартно (7 дней)", "Отмена запроса"]
     ])
-    OBJECT_TYPE = create_reply.__func__([
+    OBJECT_TYPE = create_reply([
         ["Жилой дом", "Квартира"],
         ["Коммерческое помещение", "Другое"],
         ["Отмена запроса"]
     ])
-
     CONFIRM = types.InlineKeyboardMarkup().row(
         types.InlineKeyboardButton("✅ Подтвердить", callback_data="confirm_yes"),
         types.InlineKeyboardButton("❌ Отменить", callback_data="confirm_no")
     )
 
 
-# Состояния FSM с мемоизацией
+# Состояния FSM
 class Form(StatesGroup):
     request_type = State()
     answers = State()
@@ -94,29 +93,38 @@ class Templates:
         answers = data['answers']
 
         if request_type == 'study':
-            pages = int(answers[1])
-            urgency = answers[2]
-            base_total = params['base'] * pages
-            total = base_total * params['urgency'][urgency]
-            return (
-                f"📚 *Стоимость учебного вопроса:*\n"
-                f"- Страниц: {pages} × {params['base']}₽ = {base_total}₽\n"
-                f"- Срочность ({urgency}): ×{params['urgency'][urgency]}\n"
-                f"➔ *Итого: {int(total)}₽*\n"
-                "_Цена окончательно согласовывается с исполнителем_"
-            )
+            try:
+                pages = int(answers[1])
+                urgency = answers[2]
+                base_total = params['base'] * pages
+                total = base_total * params['urgency'][urgency]
+                return (
+                    f"📚 <b>Стоимость учебного вопроса:</b>\n"
+                    f"- Страниц: {pages} × {params['base']}₽ = {base_total}₽\n"
+                    f"- Срочность ({urgency}): ×{params['urgency'][urgency]}\n"
+                    f"➔ <b>Итого: {int(total)}₽</b>\n"
+                    "<i>Цена окончательно согласовывается с исполнителем</i>"
+                )
+            except (ValueError, IndexError) as e:
+                logger.error(f"Ошибка расчета стоимости учебного вопроса: {e}")
+                return "❌ Не удалось рассчитать стоимость. Пожалуйста, повторите попытку."
+
         else:
-            object_type = answers[1]
-            urgency = answers[2]
-            total = params['base'] * params['object_type'][object_type] * params['urgency'][urgency]
-            return (
-                f"🏗️ *Стоимость рабочего вопроса:*\n"
-                f"- Базовая ставка: {params['base']}₽\n"
-                f"- Тип объекта ({object_type}): ×{params['object_type'][object_type]}\n"
-                f"- Срочность ({urgency}): ×{params['urgency'][urgency]}\n"
-                f"➔ *Итого: {int(total)}₽*\n"
-                "_Окончательная сумма может быть скорректирована_"
-            )
+            try:
+                object_type = answers[1]
+                urgency = answers[2]
+                total = params['base'] * params['object_type'][object_type] * params['urgency'][urgency]
+                return (
+                    f"🏗️ <b>Стоимость рабочего вопроса:</b>\n"
+                    f"- Базовая ставка: {params['base']}₽\n"
+                    f"- Тип объекта ({object_type}): ×{params['object_type'][object_type]}\n"
+                    f"- Срочность ({urgency}): ×{params['urgency'][urgency]}\n"
+                    f"➔ <b>Итого: {int(total)}₽</b>\n"
+                    "<i>Окончательная сумма может быть скорректирована</i>"
+                )
+            except IndexError as e:
+                logger.error(f"Ошибка расчета стоимости рабочего вопроса: {e}")
+                return "❌ Не удалось рассчитать стоимость. Пожалуйста, повторите попытку."
 
 
 # Оптимизированная структура данных для цен
@@ -154,9 +162,10 @@ async def get_next_request_number() -> int:
             counter = int(content.strip()) if content else 0
             counter += 1
             await f.seek(0)
+            await f.truncate()
             await f.write(str(counter))
             return counter
-    except Exception as e:
+    except (ValueError, IOError) as e:
         logger.error(f"Ошибка счетчика: {e}")
         return random.randint(1000, 9999)
 
@@ -230,6 +239,7 @@ async def process_answers(message: types.Message, state: FSMContext):
     if data['current_question'] < len(data['questions']):
         next_question = data['questions'][data['current_question']]
         keyboard = Keyboards.CANCEL
+
         if data['current_question'] == 1 and request_type == 'work':
             keyboard = Keyboards.OBJECT_TYPE
         elif data['current_question'] == 2:
@@ -238,9 +248,12 @@ async def process_answers(message: types.Message, state: FSMContext):
         await state.update_data(**data)
         await message.answer(next_question, reply_markup=keyboard)
     else:
-        await state.update_data(price_report=Templates.price_report(request_type, data))
+        price_report = Templates.price_report(request_type, data)
+        await state.update_data(price_report=price_report)
         await Form.confirm.set()
-        await message.answer(data['price_report'], parse_mode="Markdown")
+
+        # Разделяем отправку сообщений для корректного форматирования
+        await message.answer(price_report, parse_mode="HTML")
         await message.answer("Подтвердить запрос?", reply_markup=Keyboards.CONFIRM)
 
 
@@ -249,7 +262,9 @@ async def handle_confirmation(callback: types.CallbackQuery, state: FSMContext):
     try:
         data = await state.get_data()
         if callback.data == "confirm_yes":
-            report = await generate_report(callback.from_user, data)
+            request_number = await get_next_request_number()
+            report = await generate_report(callback.from_user, data, request_number)
+
             await bot.send_message(
                 chat_id=Config.SPECIALIST_CHAT_ID,
                 text=report,
@@ -260,8 +275,9 @@ async def handle_confirmation(callback: types.CallbackQuery, state: FSMContext):
                     )
                 )
             )
+
             await callback.message.answer(
-                f"✅ Запрос №{await get_next_request_number()} принят!\n"
+                f"✅ Запрос №{request_number} принят!\n"
                 "⚠️ Консультация не заменяет официальное проектирование.",
                 reply_markup=Keyboards.NEW_REQUEST
             )
@@ -274,20 +290,22 @@ async def handle_confirmation(callback: types.CallbackQuery, state: FSMContext):
         await state.finish()
 
 
-async def generate_report(user: types.User, data: dict) -> str:
+async def generate_report(user: types.User, data: dict, request_number: int) -> str:
     try:
-        cost = data['price_report'].split('Итого: ')[1].split('₽')[0].strip()
-    except Exception as e:
+        # Используем отдельное поле для стоимости
+        cost_str = data.get('price_report', '').split('Итого: ')[1].split('₽')[0].strip()
+        cost = int(cost_str)
+    except (IndexError, ValueError, TypeError) as e:
         logger.error(f"Ошибка извлечения стоимости: {e}")
         cost = "не определена"
 
     return (
-            f"📋 Запрос №{await get_next_request_number()}\n"
+            f"📋 Запрос №{request_number}\n"
             f"Тип: {'Учебный' if data['request_type'] == 'study' else 'Рабочий'}\n"
-            f"Пользователь: @{user.username if user.username else 'N/A'}\n"
-            f"ID: {user.id}\n\n" +
+            f"Пользователь: @{user.username or 'N/A'}\n"
+            f"ID: {user.id}\n" +
             "\n".join(f"{q}: {a}" for q, a in zip(data['questions'], data['answers'])) +
-            f"\n\nРасчетная стоимость: {cost}₽"
+            f"\nРасчетная стоимость: {cost}₽"
     )
 
 
