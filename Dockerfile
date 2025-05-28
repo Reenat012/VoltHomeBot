@@ -1,19 +1,18 @@
+# Используем официальный образ Python
 FROM python:3.10-slim
 
-# Установка Redis и создание директории данных
-RUN apt-get update && apt-get install -y \
-    redis-server \
-    && rm -rf /var/lib/apt/lists/* \
-    && mkdir -p /data
-
-# Установка зависимостей Python
+# Устанавливаем рабочую директорию
 WORKDIR /app
+
+# Копируем зависимости и устанавливаем их
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Копируем исходный код
 COPY . .
 
-# Порт для веб-сервера
+# Открываем порт для веб-сервера
 EXPOSE 8000
 
-# Команда запуска
-CMD ["sh", "-c", "redis-server --daemonize yes && sleep 2 && python main.py"]
+# Команда запуска приложения
+CMD ["python", "bot.py"]
