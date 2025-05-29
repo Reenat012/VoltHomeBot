@@ -225,7 +225,7 @@ async def cancel_request(message: types.Message, state: FSMContext):
 async def cmd_start(message: types.Message):
     await Form.service_type.set()
     await message.answer(
-        "🔌 Добро пожаловать в сервис технических консультаций!\n"
+        "🔌 Добро пожаловать в сервис технических консультаций электроснабжения!\n"
         "Выберите тип консультации:",
         reply_markup=service_type_kb
     )
@@ -237,7 +237,7 @@ async def new_request(message: types.Message):
 
 @dp.message_handler(state=Form.service_type)
 async def process_type(message: types.Message, state: FSMContext):
-    if message.text not in ["📚 Учебная консультация", "🏗️ Техническая консультация"]:
+    if message.text not in ["📚 Учебная консультация", "🏗️ Рабочая консультация"]:
         await message.answer("Пожалуйста, используйте кнопки для выбора.")
         return
 
@@ -334,7 +334,7 @@ async def confirm(callback: types.CallbackQuery, state: FSMContext):
                 username = f"@{callback.from_user.username}" if callback.from_user.username else "N/A"
 
                 report = f"📋 *Новая заявка на консультацию! Номер заявки №{req_num}*\n"
-                report += f"Тип: {'Учебная консультация' if data['service_type'] == 'study' else 'Техническая консультация'}\n"
+                report += f"Тип: {'Учебная консультация' if data['service_type'] == 'study' else 'Рабочая консультация'}\n"
                 report += f"🆔 {callback.from_user.id} | 📧 {username}\n"
                 report += f"⏱️ Срочность выполнения: {data.get('urgency', 'Не указана')}\n\n"
 
@@ -374,7 +374,7 @@ async def confirm(callback: types.CallbackQuery, state: FSMContext):
                 await callback.message.answer(
                     f"✅ Ваша заявка на консультацию принята! Номер заявки №{req_num}\n"
                     "Наш специалист свяжется с вами в ближайшее время.\n"
-                    "Помните, консультация не заменяет проектирование!",
+                    "Помните, консультация не заменяет проектирования!",
                     reply_markup=new_request_kb
                 )
 
