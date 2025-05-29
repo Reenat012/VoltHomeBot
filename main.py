@@ -38,7 +38,7 @@ WELCOME_PHRASES = [
 service_type_kb = types.ReplyKeyboardMarkup(
     [
         [types.KeyboardButton("📚 Учебная консультация")],
-        [types.KeyboardButton("🏗️ Техническая консультация")]
+        [types.KeyboardButton("🏗️ Рабочая консультация")]
     ],
     resize_keyboard=True
 )
@@ -78,7 +78,7 @@ confirm_kb = types.InlineKeyboardMarkup().row(
     types.InlineKeyboardButton("❌ Отменить", callback_data="confirm_no")
 )
 
-# Вопросы
+# Вопросы (убрали "Срок сдачи" из учебных вопросов)
 TECH_QUESTIONS = [
     "Укажите площадь объекта (м²):",
     "Количество помещений:",
@@ -88,10 +88,8 @@ TECH_QUESTIONS = [
 STUDY_QUESTIONS = [
     "Укажите тему учебного вопроса:",
     "Требуемый объем консультации (страниц):",
-    "Срок сдачи:",
     "Дополнительные пожелания:"
 ]
-
 
 class Form(StatesGroup):
     service_type = State()
@@ -100,7 +98,6 @@ class Form(StatesGroup):
     custom_building = State()
     urgency = State()
     confirm = State()
-
 
 # Коэффициенты срочности
 URGENCY_COEFFICIENTS = {
@@ -111,18 +108,17 @@ URGENCY_COEFFICIENTS = {
 
 # Логика расчета стоимости консультаций
 TECH_BASE_PRICES = {
-    1: (5000, 10000),  # До 50 м²
+    1: (5000, 10000),   # До 50 м²
     2: (10000, 15000),  # 50-100 м²
     3: (15000, 25000),  # 100-200 м²
-    4: (25000, None)  # Свыше 200 м²
+    4: (25000, None)    # Свыше 200 м²
 }
 
 STUDY_BASE_PRICES = {
-    1: (3000, 5000),  # До 20 страниц
-    2: (5000, 8000),  # 20-40 страниц
-    3: (8000, None)  # Свыше 40 страниц
+    1: (3000, 5000),    # До 20 страниц
+    2: (5000, 8000),    # 20-40 страниц
+    3: (8000, None)     # Свыше 40 страниц
 }
-
 
 # Функции работы с файлом счетчика
 def init_request_counter():
@@ -133,7 +129,6 @@ def init_request_counter():
             logging.info("Счетчик заявок инициализирован")
     except Exception as e:
         logging.error(f"Ошибка создания счетчика: {e}")
-
 
 def get_next_request_number():
     try:
@@ -151,7 +146,6 @@ def get_next_request_number():
     except Exception as e:
         logging.error(f"Ошибка счетчика: {e}")
         return random.randint(1000, 9999)
-
 
 # Расчет стоимости консультации
 def calculate_tech_consultation(data):
@@ -174,7 +168,7 @@ def calculate_tech_consultation(data):
         else:
             price_range = TECH_BASE_PRICES[4]
 
-        base_price = (price_range[0] + (price_range[1] or price_range[0] * 1.5)) // 2
+        base_price = (price_range[0] + (price_range[1] or price_range[0]*1.5)) // 2
         total = int(base_price * complexity)
 
         # Применяем коэффициент срочности
@@ -185,7 +179,7 @@ def calculate_tech_consultation(data):
             "🔧 *Предварительный расчет стоимости консультации:*",
             f"- Площадь объекта: {area} м²",
             f"- Тип объекта: {building}",
-            f"- Срочность: {data.get('urgency', 'Стандартно 7 дней')} (x{urgency_coeff})",
+            f"- Срочность выполнения: {data.get('urgency', 'Стандартно 7 дней')} (x{urgency_coeff})",
             f"- Ориентировочная стоимость: {total_with_urgency:,} руб.",
             "\n_Окончательная стоимость может быть уточнена после обсуждения деталей_"
         ]
@@ -193,7 +187,6 @@ def calculate_tech_consultation(data):
     except Exception as e:
         logging.error(f"Ошибка расчета: {e}")
         return "❌ Не удалось рассчитать стоимость. Мы свяжемся с вами для уточнения деталей."
-
 
 def calculate_study_consultation(data):
     try:
@@ -213,7 +206,7 @@ def calculate_study_consultation(data):
             "📚 *Стоимость учебной консультации:*",
             f"- Тема: {data['answers'][0]}",
             f"- Объем: {pages} стр.",
-            f"- Срочность: {data.get('urgency', 'Стандартно 7 дней')} (x{urgency_coeff})",
+            f"- Срочность выполнения: {data.get('urgency', 'Стандартно 7 дней')} (x{urgency_coeff})",
             f"- Ориентировочная стоимость: {total_price:,} руб.",
             "\n_Окончательная стоимость может быть уточнена после обсуждения деталей_"
         ]
@@ -222,13 +215,11 @@ def calculate_study_consultation(data):
         logging.error(f"Ошибка расчета: {e}")
         return "❌ Не удалось рассчитать стоимость. Мы свяжемся с вами для уточнения деталей."
 
-
 # Обработчики
 @dp.message_handler(lambda message: message.text == "Отмена заявки", state='*')
 async def cancel_request(message: types.Message, state: FSMContext):
     await state.finish()
     await message.answer("❌ Заявка отменена", reply_markup=new_request_kb)
-
 
 @dp.message_handler(commands=['start', 'help'])
 async def cmd_start(message: types.Message):
@@ -239,12 +230,10 @@ async def cmd_start(message: types.Message):
         reply_markup=service_type_kb
     )
 
-
 @dp.message_handler(lambda m: m.text == "📝 Новая заявка!")
 async def new_request(message: types.Message):
     await Form.service_type.set()
     await message.answer(random.choice(WELCOME_PHRASES), reply_markup=service_type_kb)
-
 
 @dp.message_handler(state=Form.service_type)
 async def process_type(message: types.Message, state: FSMContext):
@@ -260,7 +249,6 @@ async def process_type(message: types.Message, state: FSMContext):
 
     await Form.answers.set()
     await message.answer(data['questions'][0], reply_markup=cancel_request_kb)
-
 
 @dp.message_handler(state=Form.answers)
 async def process_answers(message: types.Message, state: FSMContext):
@@ -295,7 +283,6 @@ async def process_answers(message: types.Message, state: FSMContext):
             await Form.urgency.set()
             await message.answer("⏱️ Выберите срочность выполнения консультации:", reply_markup=urgency_kb)
 
-
 @dp.message_handler(state=Form.building_type)
 async def process_building(message: types.Message, state: FSMContext):
     async with state.proxy() as data:
@@ -308,7 +295,6 @@ async def process_building(message: types.Message, state: FSMContext):
             data['current_question'] += 1
             await message.answer(data['questions'][data['current_question']], reply_markup=cancel_request_kb)
 
-
 @dp.message_handler(state=Form.custom_building)
 async def process_custom_building(message: types.Message, state: FSMContext):
     async with state.proxy() as data:
@@ -316,7 +302,6 @@ async def process_custom_building(message: types.Message, state: FSMContext):
         await Form.answers.set()
         data['current_question'] += 1
         await message.answer(data['questions'][data['current_question']], reply_markup=cancel_request_kb)
-
 
 @dp.message_handler(state=Form.urgency)
 async def process_urgency(message: types.Message, state: FSMContext):
@@ -340,7 +325,6 @@ async def process_urgency(message: types.Message, state: FSMContext):
         await message.answer(data['price_report'], parse_mode="Markdown")
         await message.answer("Подтвердить заявку на консультацию?", reply_markup=confirm_kb)
 
-
 @dp.callback_query_handler(lambda c: c.data in ['confirm_yes', 'confirm_no'], state=Form.confirm)
 async def confirm(callback: types.CallbackQuery, state: FSMContext):
     if callback.data == 'confirm_yes':
@@ -352,7 +336,7 @@ async def confirm(callback: types.CallbackQuery, state: FSMContext):
                 report = f"📋 *Новая заявка на консультацию! Номер заявки №{req_num}*\n"
                 report += f"Тип: {'Учебная консультация' if data['service_type'] == 'study' else 'Техническая консультация'}\n"
                 report += f"🆔 {callback.from_user.id} | 📧 {username}\n"
-                report += f"⏱️ Срочность: {data.get('urgency', 'Не указана')}\n\n"
+                report += f"⏱️ Срочность выполнения: {data.get('urgency', 'Не указана')}\n\n"
 
                 if data['service_type'] == "tech":
                     report += (
@@ -365,8 +349,7 @@ async def confirm(callback: types.CallbackQuery, state: FSMContext):
                     report += (
                         f"📖 Тема: {data['answers'][0]}\n"
                         f"📄 Объем: {data['answers'][1]} стр.\n"
-                        f"⏳ Срок: {data['answers'][2]}\n"
-                        f"💡 Пожелания: {data['answers'][3]}\n\n"
+                        f"💡 Пожелания: {data['answers'][2]}\n\n"
                     )
 
                 report += f"💬 *Детали расчета стоимости:*\n{data['price_report']}"
@@ -390,7 +373,8 @@ async def confirm(callback: types.CallbackQuery, state: FSMContext):
 
                 await callback.message.answer(
                     f"✅ Ваша заявка на консультацию принята! Номер заявки №{req_num}\n"
-                    "Наш специалист свяжется с вами в ближайшее время.",
+                    "Наш специалист свяжется с вами в ближайшее время.\n"
+                    "Помните, консультация не заменяет проектирование!",
                     reply_markup=new_request_kb
                 )
 
@@ -407,19 +391,16 @@ async def confirm(callback: types.CallbackQuery, state: FSMContext):
         )
     await state.finish()
 
-
 # Вебхук
 async def on_startup(dp):
     init_request_counter()
     await bot.set_webhook(WEBHOOK_URL)
     logging.info("Бот запущен")
 
-
 async def on_shutdown(dp):
     await bot.delete_webhook()
     await dp.storage.close()
     logging.info("Бот остановлен")
-
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
