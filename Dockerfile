@@ -1,18 +1,17 @@
-# Используем официальный образ Python
-FROM python:3.10-slim
+FROM python:3.10-slim-buster
 
-# Устанавливаем рабочую директорию
 WORKDIR /app
 
-# Копируем зависимости и устанавливаем их
+RUN apt-get update && apt-get install -y \
+    gcc \
+    python3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Копируем исходный код
 COPY . .
 
-# Открываем порт для веб-сервера
 EXPOSE 8000
 
-# Команда запуска приложения
-CMD ["python", "bot.py"]
+CMD ["python", "main.py"]
