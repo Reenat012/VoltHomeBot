@@ -1,93 +1,108 @@
 """
-Главный файл Telegram-бота с интеграцией Webhook для Timeweb
+VoltHomeBot — главный файл.
+Webhook для Timeweb + авто-фолбэк в long polling.
 MVP (Бета): флажок "нужен чертёж", приём вложений, расчёт и отправка заявки.
 """
 
 import os
 import logging
 import random
+import asyncio
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
-from aiogram.utils.executor import start_webhook
 from dotenv import load_dotenv
 
-# ---------- ENV ----------
+# -------------------- ENV --------------------
 load_dotenv()
+
+def _bool_env(name: str, default: bool = False) -> bool:
+    val = (os.getenv(name) or "").strip().lower()
+    if val in ("1", "true", "yes", "y", "on"):
+        return True
+    if val in ("0", "false", "no", "n", "off"):
+        return False
+    return default
+
 BOT_TOKEN = (os.getenv("BOT_TOKEN") or "").strip()
 if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN не задан (env).")
+    raise RuntimeError("BOT_TOKEN не задан в переменных окружения.")
 
 try:
     DESIGNER_CHAT_ID = int((os.getenv("DESIGNER_CHAT_ID") or "0").strip())
 except ValueError:
     raise RuntimeError("DESIGNER_CHAT_ID должен быть целым числом.")
-
 if not DESIGNER_CHAT_ID:
-    raise RuntimeError("DESIGNER_CHAT_ID не задан (env).")
+    raise RuntimeError("DESIGNER_CHAT_ID не задан в переменных окружения.")
 
-# ---------- Webhook config ----------
-WEBHOOK_HOST = os.getenv("WEBHOOK_HOST", "https://reenat012-volthomebot-2d67.twc1.net").rstrip("/")
+# Webhook / Server
+WEBHOOK_HOST = (os.getenv("WEBHOOK_HOST") or "").strip().rstrip("/")
 WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "/webhook")
-WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 WEBAPP_HOST = os.getenv("WEBAPP_HOST", "0.0.0.0")
 WEBAPP_PORT = int(os.getenv("WEBAPP_PORT", "8000"))
+USE_POLLING = _bool_env("USE_POLLING", default=False)
 
-# ---------- Bot / Dispatcher ----------
-bot = Bot(token=BOT_TOKEN, parse_mode=types.ParseMode.MARKDOWN)  # сохраним Markdown как у тебя
+WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}" if WEBHOOK_HOST else None
+
+# -------------------- BOT / DP --------------------
+# Оставляем старый Markdown, чтобы не переписывать экранирование.
+bot = Bot(token=BOT_TOKEN, parse_mode=types.ParseMode.MARKDOWN)
 dp = Dispatcher(bot, storage=MemoryStorage())
 
-# ---------- Misc ----------
+# -------------------- MISC --------------------
 REQUEST_COUNTER_FILE = "request_counter.txt"
 WELCOME_PHRASES = [
     "Снова к нам? Отлично! Давайте новую заявку!",
     "Рады видеть вас снова! Готовы начать?",
-    "Новая заявка — новые возможности! Поехали!"
+    "Новая заявка — новые возможности! Поехали!",
 ]
 
-# ---------- Keyboards ----------
+# -------------------- KEYBOARDS --------------------
 service_type_kb = types.ReplyKeyboardMarkup(
-    [
+    keyboard=[
         [types.KeyboardButton("📚 Учебная консультация")],
-        [types.KeyboardButton("🏗️ Рабочая консультация")]
+        [types.KeyboardButton("🏗️ Рабочая консультация")],
     ],
-    resize_keyboard=True
+    resize_keyboard=True,
 )
 
 cancel_request_kb = types.ReplyKeyboardMarkup(
-    [[types.KeyboardButton("Отмена заявки")]],
-    resize_keyboard=True
+    keyboard=[[types.KeyboardButton("Отмена заявки")]],
+    resize_keyboard=True,
 )
 
 attachments_kb = types.ReplyKeyboardMarkup(
-    [[types.KeyboardButton("Готово")], [types.KeyboardButton("Отмена заявки")]],
-    resize_keyboard=True
+    keyboard=[
+        [types.KeyboardButton("Готово")],
+        [types.KeyboardButton("Отмена заявки")],
+    ],
+    resize_keyboard=True,
 )
 
 new_request_kb = types.ReplyKeyboardMarkup(
-    [[types.KeyboardButton("📝 Новая заявка!")]],
-    resize_keyboard=True
+    keyboard=[[types.KeyboardButton("📝 Новая заявка!")]],
+    resize_keyboard=True,
 )
 
 building_type_kb = types.ReplyKeyboardMarkup(
-    [
+    keyboard=[
         [types.KeyboardButton("Жилое"), types.KeyboardButton("Коммерческое")],
         [types.KeyboardButton("Промышленное"), types.KeyboardButton("Другое")],
-        [types.KeyboardButton("Отмена заявки")]
+        [types.KeyboardButton("Отмена заявки")],
     ],
-    resize_keyboard=True
+    resize_keyboard=True,
 )
 
 urgency_kb = types.ReplyKeyboardMarkup(
-    [
+    keyboard=[
         [types.KeyboardButton("Срочно 24 часа")],
         [types.KeyboardButton("В течении 3-5 дней")],
         [types.KeyboardButton("Стандартно 7 дней")],
-        [types.KeyboardButton("Отмена заявки")]
+        [types.KeyboardButton("Отмена заявки")],
     ],
-    resize_keyboard=True
+    resize_keyboard=True,
 )
 
 confirm_kb = types.InlineKeyboardMarkup().row(
@@ -100,35 +115,35 @@ need_drawing_kb = types.InlineKeyboardMarkup().row(
     types.InlineKeyboardButton("Без чертежа", callback_data="drawing_no"),
 )
 
-# ---------- Questions ----------
+# -------------------- QUESTIONS --------------------
 TECH_QUESTIONS = [
     "Укажите площадь объекта (м²):",
     "Количество помещений:",
-    "Особые требования к консультации:"
+    "Особые требования к консультации:",
 ]
 
 STUDY_QUESTIONS = [
     "Укажите тему учебного вопроса:",
     "Требуемый объем консультации (страниц):",
-    "Дополнительные пожелания:"
+    "Дополнительные пожелания:",
 ]
 
-# ---------- States ----------
+# -------------------- FSM --------------------
 class Form(StatesGroup):
     service_type = State()
     answers = State()
     building_type = State()
     custom_building = State()
-    need_drawing = State()   # Новый шаг
-    attachments = State()    # Новый шаг
+    need_drawing = State()
+    attachments = State()
     urgency = State()
     confirm = State()
 
-# ---------- Pricing ----------
+# -------------------- PRICING --------------------
 URGENCY_COEFFICIENTS = {
     "Срочно 24 часа": 1.5,
     "В течении 3-5 дней": 1.2,
-    "Стандартно 7 дней": 1.0
+    "Стандартно 7 дней": 1.0,
 }
 
 TECH_BASE_PRICES = {
@@ -144,8 +159,8 @@ STUDY_BASE_PRICES = {
     3: (8000, None),
 }
 
-# ---------- Counter helpers ----------
-def init_request_counter():
+# -------------------- COUNTER --------------------
+def init_request_counter() -> None:
     try:
         if not os.path.exists(REQUEST_COUNTER_FILE):
             with open(REQUEST_COUNTER_FILE, "w") as f:
@@ -170,16 +185,16 @@ def get_next_request_number() -> int:
         logging.error(f"Ошибка счётчика: {e}")
         return random.randint(1000, 9999)
 
-# ---------- Price calculators ----------
+# -------------------- CALCULATORS --------------------
 def calculate_tech_consultation(data: dict) -> str:
     try:
-        area = float(data['answers'][0])
-        building = data['answers'][2] if len(data['answers']) > 2 else "Не указано"
+        area = float(data["answers"][0])
+        building = data["answers"][2] if len(data["answers"]) > 2 else "Не указано"
 
         complexity = {
             "Жилое": 1.0,
             "Коммерческое": 1.3,
-            "Промышленное": 1.5
+            "Промышленное": 1.5,
         }.get(building.split()[0], 1.2)
 
         if area <= 50:
@@ -191,10 +206,11 @@ def calculate_tech_consultation(data: dict) -> str:
         else:
             price_range = TECH_BASE_PRICES[4]
 
-        base_price = int((price_range[0] + (price_range[1] or int(price_range[0] * 1.5))) / 2)
+        hi = price_range[1] if price_range[1] is not None else int(price_range[0] * 1.5)
+        base_price = int((price_range[0] + hi) / 2)
         total = int(base_price * complexity)
 
-        urgency_coeff = URGENCY_COEFFICIENTS.get(data.get('urgency', "Стандартно 7 дней"), 1.0)
+        urgency_coeff = URGENCY_COEFFICIENTS.get(data.get("urgency", "Стандартно 7 дней"), 1.0)
         total_with_urgency = int(total * urgency_coeff)
 
         report = [
@@ -212,7 +228,7 @@ def calculate_tech_consultation(data: dict) -> str:
 
 def calculate_study_consultation(data: dict) -> str:
     try:
-        pages = int(data['answers'][1])
+        pages = int(data["answers"][1])
         if pages <= 20:
             price = STUDY_BASE_PRICES[1][0]
         elif pages <= 40:
@@ -220,7 +236,7 @@ def calculate_study_consultation(data: dict) -> str:
         else:
             price = int(STUDY_BASE_PRICES[3][0] * 1.2)
 
-        urgency_coeff = URGENCY_COEFFICIENTS.get(data.get('urgency', "Стандартно 7 дней"), 1.0)
+        urgency_coeff = URGENCY_COEFFICIENTS.get(data.get("urgency", "Стандартно 7 дней"), 1.0)
         total_price = int(price * urgency_coeff)
 
         report = [
@@ -236,7 +252,7 @@ def calculate_study_consultation(data: dict) -> str:
         logging.exception("Ошибка расчёта (study): %s", e)
         return "❌ Не удалось рассчитать стоимость. Мы свяжемся с вами для уточнения деталей."
 
-# ---------- Handlers ----------
+# -------------------- HANDLERS --------------------
 @dp.message_handler(lambda m: m.text == "Отмена заявки", state="*")
 async def cancel_request(message: types.Message, state: FSMContext):
     await state.finish()
@@ -249,7 +265,7 @@ async def cmd_start(message: types.Message):
         "🔌 Добро пожаловать в сервис консультаций *VoltHome (Бета)*!\n\n"
         "Функция находится в тестировании — интерфейс и скорость отклика могут меняться.\n\n"
         "Выберите тип консультации:",
-        reply_markup=service_type_kb
+        reply_markup=service_type_kb,
     )
 
 @dp.message_handler(lambda m: m.text == "📝 Новая заявка!")
@@ -278,7 +294,7 @@ async def process_answers(message: types.Message, state: FSMContext):
     questions = data.get("questions", [])
     answers = data.get("answers", [])
 
-    answer = message.text.strip()
+    answer = (message.text or "").strip()
 
     # Валидации
     if svc == "tech":
@@ -295,14 +311,14 @@ async def process_answers(message: types.Message, state: FSMContext):
     answers.append(answer)
     await state.update_data(answers=answers)
 
-    # После 2-го ответа показываем "нужен ли чертёж"
-    if (svc in ("tech", "study")) and current == 1:
+    # После 2-го ответа — флажок "нужен чертёж"
+    if current == 1:
         await Form.need_drawing.set()
         await message.answer(
             "Нужна ли консультация с подготовкой *чертежа схемы щита*?",
-            reply_markup=need_drawing_kb
+            reply_markup=need_drawing_kb,
         )
-        await state.update_data(current_question=current + 1)  # чтобы далее вернуться к цепочке
+        await state.update_data(current_question=current + 1)
         return
 
     # Ветка "тип объекта" для tech после вопроса о помещениях
@@ -311,13 +327,12 @@ async def process_answers(message: types.Message, state: FSMContext):
         await message.answer("🏢 Выберите тип объекта:", reply_markup=building_type_kb)
         return
 
-    # Идём по вопросам дальше
+    # Следующий вопрос / переход к срочности
     current += 1
     if current < len(questions):
         await state.update_data(current_question=current)
         await message.answer(questions[current], reply_markup=cancel_request_kb)
     else:
-        # Закончили блок вопросов → срочность
         await Form.urgency.set()
         await message.answer("⏱️ Выберите срочность выполнения консультации:", reply_markup=urgency_kb)
 
@@ -326,17 +341,15 @@ async def choose_drawing(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
     await state.update_data(need_drawing=(callback.data == "drawing_yes"))
 
-    # Переходим к приёму вложений
     await Form.attachments.set()
     await callback.message.answer(
         "Прикрепите фото/документы (план, ТЗ, скриншоты) — по одному сообщению.\n"
         "Когда закончите, нажмите «Готово».",
-        reply_markup=attachments_kb
+        reply_markup=attachments_kb,
     )
 
 @dp.message_handler(lambda m: m.text == "Готово", state=Form.attachments)
 async def attachments_done(message: types.Message, state: FSMContext):
-    # После вложений идём к срочности
     await Form.urgency.set()
     await message.answer("⏱️ Выберите срочность выполнения консультации:", reply_markup=urgency_kb)
 
@@ -397,14 +410,13 @@ async def process_urgency(message: types.Message, state: FSMContext):
         await message.answer("Пожалуйста, выберите вариант срочности из предложенных кнопок.")
         return
 
-    data = await state.get_data()
     await state.update_data(urgency=message.text)
+    data = await state.get_data()
 
-    # Расчёт
     if data.get("service_type") == "tech":
-        price_report = calculate_tech_consultation(await state.get_data())
+        price_report = calculate_tech_consultation(data)
     else:
-        price_report = calculate_study_consultation(await state.get_data())
+        price_report = calculate_study_consultation(data)
 
     await state.update_data(price_report=price_report)
     await Form.confirm.set()
@@ -418,12 +430,10 @@ async def confirm(callback: types.CallbackQuery, state: FSMContext):
         await callback.message.answer("❌ Заявка отменена.", reply_markup=new_request_kb)
         return
 
-    # confirm_yes
     req_num = get_next_request_number()
     data = await state.get_data()
     username = f"@{callback.from_user.username}" if callback.from_user.username else "N/A"
 
-    # Сводка для специалиста
     report_lines = [
         f"📋 *Новая заявка на консультацию! Номер заявки №{req_num}*",
         f"🧪 Канал: VoltHome (Бета)",
@@ -431,12 +441,11 @@ async def confirm(callback: types.CallbackQuery, state: FSMContext):
         f"🆔 {callback.from_user.id} | 📧 {username}",
         f"Тип: {'Учебная консультация' if data.get('service_type') == 'study' else 'Рабочая консультация'}",
         f"⏱️ Срочность выполнения: {data.get('urgency', 'Не указана')}",
-        ""
+        "",
     ]
 
     answers = data.get("answers", [])
     if data.get("service_type") == "tech":
-        # ожидаем: 0 — площадь, 1 — помещения, 2/3 — тип/особые требования
         area = answers[0] if len(answers) > 0 else "—"
         rooms = answers[1] if len(answers) > 1 else "—"
         building = answers[2] if len(answers) > 2 else "—"
@@ -446,10 +455,9 @@ async def confirm(callback: types.CallbackQuery, state: FSMContext):
             f"📏 Площадь: {area} м²",
             f"🚪 Помещений: {rooms}",
             f"💼 Требования: {requirements}",
-            ""
+            "",
         ]
     else:
-        # study: 0 — тема, 1 — объём, 2 — пожелания
         topic = answers[0] if len(answers) > 0 else "—"
         pages = answers[1] if len(answers) > 1 else "—"
         wishes = answers[2] if len(answers) > 2 else "—"
@@ -457,10 +465,9 @@ async def confirm(callback: types.CallbackQuery, state: FSMContext):
             f"📖 Тема: {topic}",
             f"📄 Объём: {pages} стр.",
             f"💡 Пожелания: {wishes}",
-            ""
+            "",
         ]
 
-    # флажок чертежа и вложения
     need_drawing = data.get("need_drawing")
     if need_drawing is not None:
         report_lines.append(f"📐 Чертёж схемы щита: {'нужен' if need_drawing else 'не требуется'}")
@@ -472,15 +479,13 @@ async def confirm(callback: types.CallbackQuery, state: FSMContext):
     report_text = "\n".join(report_lines)
 
     try:
-        # 1) текст
         await bot.send_message(
             chat_id=DESIGNER_CHAT_ID,
             text=report_text,
             reply_markup=types.InlineKeyboardMarkup().add(
                 types.InlineKeyboardButton("💬 Написать клиенту", url=f"tg://user?id={callback.from_user.id}")
-            )
+            ),
         )
-        # 2) вложения (если есть)
         for kind, fid in attachments:
             if kind == "photo":
                 await bot.send_photo(DESIGNER_CHAT_ID, fid, caption=f"Заявка №{req_num}: фото")
@@ -494,28 +499,60 @@ async def confirm(callback: types.CallbackQuery, state: FSMContext):
         f"✅ Ваша заявка на консультацию принята! Номер заявки №{req_num}\n"
         "Наш специалист свяжется с вами в ближайшее время.\n"
         "Помните, консультация не заменяет проектирования!",
-        reply_markup=new_request_kb
+        reply_markup=new_request_kb,
     )
 
-# ---------- Webhook ----------
-async def on_startup(dp: Dispatcher):
-    init_request_counter()
-    await bot.set_webhook(WEBHOOK_URL)
-    logging.info("Бот запущен. Webhook: %s", WEBHOOK_URL)
+# -------------------- START/SHUTDOWN --------------------
+async def try_set_webhook() -> bool:
+    """
+    Пытаемся поставить вебхук. Возвращаем True при успехе.
+    """
+    if not WEBHOOK_URL:
+        logging.error("WEBHOOK_HOST не задан — пропускаю установку вебхука.")
+        return False
 
-async def on_shutdown(dp: Dispatcher):
-    await bot.delete_webhook()
-    await dp.storage.close()
-    logging.info("Бот остановлен")
+    from aiogram.utils.exceptions import TelegramAPIError
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+        await bot.set_webhook(WEBHOOK_URL)
+        info = await bot.get_webhook_info()
+        logging.info("Webhook установлен: %s (pending_update_count=%s)", info.url, info.pending_update_count)
+        return True
+    except TelegramAPIError as e:
+        logging.error("Не удалось поставить вебхук: %s", e)
+        return False
 
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+def start_as_webhook():
     from aiogram.utils.executor import start_webhook
+    logging.info("Запускаю aiohttp-сервер для webhook на %s:%s", WEBAPP_HOST, WEBAPP_PORT)
     start_webhook(
         dispatcher=dp,
         webhook_path=WEBHOOK_PATH,
-        on_startup=on_startup,
-        on_shutdown=on_shutdown,
+        on_startup=lambda _: init_request_counter(),
+        on_shutdown=None,
         host=WEBAPP_HOST,
         port=WEBAPP_PORT,
     )
+
+def start_as_polling():
+    from aiogram.utils.executor import start_polling
+    logging.info("Запускаю long polling (skip_updates=True)")
+    init_request_counter()
+    start_polling(dp, skip_updates=True)
+
+# -------------------- ENTRY --------------------
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+    logging.info("Bot: %s", (asyncio.get_event_loop().run_until_complete(bot.get_me())).username)
+
+    if USE_POLLING:
+        # Принудительно long polling по флагу окружения
+        start_as_polling()
+    else:
+        # Пытаемся поставить вебхук, при неудаче — фолбэк в polling
+        ok = asyncio.get_event_loop().run_until_complete(try_set_webhook())
+        if ok:
+            start_as_webhook()
+        else:
+            logging.info("Фолбэк в long polling из-за проблем с вебхуком.")
+            start_as_polling()
