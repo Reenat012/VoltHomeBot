@@ -1,27 +1,28 @@
-# База с актуальными репозиториями Debian
+# Актуальная база Debian
 FROM python:3.10-slim-bullseye
 
-# Не писать .pyc и сразу логировать в stdout
+# Не писать .pyc и логировать в stdout; отключить кеш pip
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
 
 WORKDIR /app
 
-# Если нужны нативные зависимости для сборки (cryptography и т.п.)
-# Если не нужны — можно удалить весь этот RUN-блок.
+# Нативные зависимости (нужны для сборки некоторых колёс, можно удалить, если не требуется)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
- && rm -rf /var/lib/apt/lists/*
+  && rm -rf /var/lib/apt/lists/*
 
-# Зависимости Python
+# Сначала зависимости — лучше кэшируется
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN python -m pip install --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir --prefer-binary -r requirements.txt
 
-# Код приложения
+# Затем код
 COPY . .
 
-# Порт вебхука (можно переопределить переменными окружения)
+# Порт вебхука
 EXPOSE 8000
 
-# Запуск бота (webhook/polling определяется твоим main.py)
+# Запуск
 CMD ["python", "main.py"]
