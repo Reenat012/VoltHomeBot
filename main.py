@@ -50,9 +50,12 @@ USE_POLLING = _bool_env("USE_POLLING", default=False)
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}" if WEBHOOK_HOST else None
 
 # -------------------- BOT / DP --------------------
-# Markdown оставляем только для клиентских сообщений
-bot = Bot(token=BOT_TOKEN, parse_mode=types.ParseMode.MARKDOWN)
+# ВАЖНО: НЕ задаём parse_mode глобально, чтобы не ломать сообщения в канал проектировщика!
+bot = Bot(token=BOT_TOKEN)  # parse_mode=None
 dp = Dispatcher(bot, storage=MemoryStorage())
+
+# Удобная константа для Markdown в сообщениях пользователю
+USER_MD = types.ParseMode.MARKDOWN
 
 # -------------------- MISC --------------------
 REQUEST_COUNTER_FILE = "request_counter.txt"
@@ -137,8 +140,10 @@ urgency_kb = types.ReplyKeyboardMarkup(
 # Инлайн «да/нет»
 def yn_kb(yes_cb: str, no_cb: str) -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("Да", callback_data=yes_cb),
-           types.InlineKeyboardButton("Нет", callback_data=no_cb))
+    kb.add(
+        types.InlineKeyboardButton("Да", callback_data=yes_cb),
+        types.InlineKeyboardButton("Нет", callback_data=no_cb),
+    )
     return kb
 
 # -------------------- FSM --------------------
@@ -164,9 +169,17 @@ URGENCY_COEFFICIENTS = {
     "Стандартно 7 дней": 1.0,
 }
 
-# Базовые прайсы — набросок
-DRAFT_BASE = {"draft_oneline": 7000, "draft_mount": 9000, "draft_other": 8000}
-LOADS_BASE = {"loads_pick": 6000, "loads_audit": 8000, "loads_phases": 7000, "loads_other": 6500}
+DRAFT_BASE = {
+    "draft_oneline": 7000,
+    "draft_mount": 9000,
+    "draft_other": 8000,
+}
+LOADS_BASE = {
+    "loads_pick": 6000,
+    "loads_audit": 8000,
+    "loads_phases": 7000,
+    "loads_other": 6500,
+}
 FULL_BASE = 15000
 
 # -------------------- COUNTER --------------------
@@ -225,8 +238,8 @@ def calc_price_loads(state_data: dict) -> str:
     base = LOADS_BASE.get(sub, LOADS_BASE["loads_other"])
     area = float(state_data.get("area") or 0)
     groups = int(state_data.get("groups_count") or 0)
-    k_area = 1.0 + min(area, 300) / 1000.0       # до +0.3
-    k_groups = 1.0 + min(groups, 40) / 200.0     # до +0.2
+    k_area = 1.0 + min(area, 300) / 1000.0
+    k_groups = 1.0 + min(groups, 40) / 200.0
     if state_data.get("need_inrush"):
         base += 1000
     total = int(base * k_area * k_groups * _urgency_coeff(state_data))
@@ -273,17 +286,8 @@ async def cmd_start(message: types.Message):
         "🔌 Добро пожаловать в *VoltHome (Бета)*!\n\n"
         "Какая услуга вам требуется?",
         reply_markup=services_kb,
+        parse_mode=USER_MD,
     )
-
-# -------- PATCH A: тестовая команда отправки проектировщику --------
-@dp.message_handler(commands=["test_notify"])
-async def test_notify(message: types.Message):
-    try:
-        await bot.send_message(DESIGNER_CHAT_ID, "🔔 Тест: уведомление проектировщику OK", parse_mode=None)
-        await message.answer(f"✅ Ушло в DESIGNER_CHAT_ID={DESIGNER_CHAT_ID}")
-    except Exception as e:
-        logging.exception("Ошибка test_notify: %s", e)
-        await message.answer(f"❌ Не смог отправить: {e}")
 
 @dp.message_handler(lambda m: m.text == "📝 Новая заявка!")
 async def new_request(message: types.Message):
@@ -294,26 +298,26 @@ async def new_request(message: types.Message):
 @dp.message_handler(state=Form.service_category)
 async def choose_service(message: types.Message, state: FSMContext):
     txt = (message.text or "").strip()
-    if txt.startswith("1"):
+    if txt.startswith("1"):  # Чертёж
         await state.update_data(service_category="draft", attachments=[])
         await Form.sub_category.set()
         await message.answer("Уточните тип чертежа:", reply_markup=draft_sub_kb)
-    elif txt.startswith("2"):
+    elif txt.startswith("2"):  # Нагрузки
         await state.update_data(service_category="loads", attachments=[])
         await Form.sub_category.set()
         await message.answer("Какой тип консультации по нагрузкам?", reply_markup=loads_sub_kb)
-    elif txt.startswith("3"):
+    elif txt.startswith("3"):  # Полная
         await state.update_data(service_category="full", attachments=[])
         await Form.object_type.set()
         await message.answer("Выберите тип объекта:", reply_markup=object_type_kb)
-    elif txt.startswith("4"):
+    elif txt.startswith("4"):  # Другое
         await state.update_data(service_category="other", attachments=[])
         await Form.free_text.set()
         await message.answer("Опишите кратко, что требуется:", reply_markup=cancel_request_kb)
     else:
         await message.answer("Пожалуйста, выберите один из пунктов меню выше.", reply_markup=services_kb)
 
-# --- 2) Подтипы ---
+# --- 2) Подтип ---
 @dp.message_handler(state=Form.sub_category)
 async def choose_subcategory(message: types.Message, state: FSMContext):
     data = await state.get_data()
@@ -513,7 +517,7 @@ async def choose_urgency(message: types.Message, state: FSMContext):
         price_report = calc_price_loads(data)
     elif svc == "full":
         price_report = calc_price_full(data)
-    else:
+    else:  # other
         price_report = (
             "📝 *Предварительная оценка:*\n"
             "- Услуга: Другое (по описанию)\n"
@@ -527,7 +531,7 @@ async def choose_urgency(message: types.Message, state: FSMContext):
         types.InlineKeyboardButton("✅ Подтвердить", callback_data="confirm_yes"),
         types.InlineKeyboardButton("❌ Отменить", callback_data="confirm_no"),
     )
-    await message.answer(price_report)
+    await message.answer(price_report, parse_mode=USER_MD)
     await message.answer("Подтвердить заявку?", reply_markup=confirm_kb)
 
 # --- 10) Подтверждение и отправка ---
@@ -543,14 +547,16 @@ async def confirm_cb(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     username = f"@{callback.from_user.username}" if callback.from_user.username else "N/A"
 
+    # Текст отчёта для проектировщика — БЕЗ Markdown!
     lines = [
-        f"📋 *Новая заявка! №{req_num}*",
+        f"📋 Новая заявка! №{req_num}",
         f"👤 {callback.from_user.full_name}",
-        f"🆔 {callback.from_user.id} | 📧 {username}",
+        f"🆔 {callback.from_user.id} | {username}",
         f"Услуга: {data.get('service_category')} | Подтип: {data.get('sub_category', '—')}",
         f"Тип объекта: {data.get('object_type', '—')}",
         f"Площадь: {int(float(data.get('area', 0) or 0))} м²",
     ]
+
     if data.get("service_category") == "loads":
         lines += [
             f"Групп: {data.get('groups_count', '—')}",
@@ -565,51 +571,35 @@ async def confirm_cb(callback: types.CallbackQuery, state: FSMContext):
         lines += [f"Перечень групп: {'есть' if data.get('has_list_of_groups') else 'нет'}"]
     if data.get("service_category") == "other" and data.get("free_text"):
         lines += [f"Описание: {data.get('free_text')}"]
+
     lines += [
         f"Срочность: {data.get('urgency', '—')}",
         "",
-        "💬 *Детали расчёта:*",
-        data.get("price_report", "—"),
+        "Детали расчёта:",
+        data.get("price_report", "—"),  # это уже с разметкой, но мы шлём без parse_mode -> отобразится обычным текстом
     ]
-    text = "\n".join(lines)
+    text_for_designer = "\n".join(lines)
 
-    # -------- PATCH B: безопасная отправка + подробные логи --------
+    # отправка проектировщику (parse_mode НЕ указываем!)
     try:
-        logging.info("Sending request #%s to DESIGNER_CHAT_ID=%s", req_num, DESIGNER_CHAT_ID)
-
-        # длинные сообщения режем, чтобы не упереться в лимит Telegram
-        if len(text) > 3500:
-            await bot.send_message(DESIGNER_CHAT_ID, text[:3500] + "\n…(обрезано)", parse_mode=None)
-            await bot.send_message(DESIGNER_CHAT_ID, text[3500:], parse_mode=None)
-        else:
-            await bot.send_message(
-                chat_id=DESIGNER_CHAT_ID,
-                text=text,
-                reply_markup=types.InlineKeyboardMarkup().add(
-                    types.InlineKeyboardButton("💬 Написать клиенту", url=f"tg://user?id={callback.from_user.id}")
-                ),
-                parse_mode=None  # важное: без Markdown
-            )
-
-        # вложения
+        await bot.send_message(
+            chat_id=DESIGNER_CHAT_ID,
+            text=text_for_designer,
+            reply_markup=types.InlineKeyboardMarkup().add(
+                types.InlineKeyboardButton("💬 Написать клиенту", url=f"tg://user?id={callback.from_user.id}")
+            ),
+        )
         for kind, fid in data.get("attachments", []):
             if kind == "photo":
-                await bot.send_photo(
-                    DESIGNER_CHAT_ID, fid, caption=f"Заявка №{req_num}: фото", parse_mode=None
-                )
+                await bot.send_photo(DESIGNER_CHAT_ID, fid, caption=f"Заявка №{req_num}: фото")
             else:
-                await bot.send_document(
-                    DESIGNER_CHAT_ID, fid, caption=f"Заявка №{req_num}: документ", parse_mode=None
-                )
-
-        logging.info("Request #%s delivered to designer", req_num)
-
+                await bot.send_document(DESIGNER_CHAT_ID, fid, caption=f"Заявка №{req_num}: документ")
     except Exception as e:
         logging.exception("Ошибка отправки заявки специалисту: %s", e)
-        # Подсветим проблему прямо в диалоге, чтобы не терять заявки
+        # Сообщаем пользователю простым текстом (без Markdown), чтобы не дублировать проблему парсинга
         await callback.message.answer(
-            f"⚠️ Не удалось отправить заявку проектировщику: {e}\n"
-            f"Проверьте, что боту разрешено писать в DESIGNER_CHAT_ID={DESIGNER_CHAT_ID}."
+            "⚠️ Не удалось отправить заявку проектировщику. "
+            "Проверьте, что боту разрешено писать в чат проектировщика."
         )
 
     await state.finish()
@@ -618,6 +608,7 @@ async def confirm_cb(callback: types.CallbackQuery, state: FSMContext):
         "Наш специалист свяжется с вами в ближайшее время.\n"
         "Помните, консультация не заменяет проектирования!",
         reply_markup=new_request_kb,
+        parse_mode=USER_MD,
     )
 
 # -------------------- START/SHUTDOWN --------------------
@@ -660,13 +651,7 @@ if __name__ == "__main__":
     logging.getLogger("aiogram").setLevel(logging.INFO)
 
     me = asyncio.get_event_loop().run_until_complete(bot.get_me())
-    # -------- PATCH C: расширенные стартовые логи --------
-    logging.info(
-        "Bot: %s | DESIGNER_CHAT_ID=%s | MODE=%s",
-        me.username,
-        DESIGNER_CHAT_ID,
-        "POLLING" if USE_POLLING else f"WEBHOOK {WEBHOOK_URL or '—'}",
-    )
+    logging.info("Bot: %s", me.username)
 
     if USE_POLLING:
         start_as_polling()
