@@ -1,3 +1,5 @@
+Вот полный файл main.py с новой ценовой политикой, мягкими коэффициентами и промо-скидкой через ENV. Глобальный parse_mode убран (как и раньше), Markdown используется только в сообщениях пользователю.
+
 """
 VoltHomeBot — главный файл.
 Webhook для Timeweb + авто-фолбэк в long polling.
@@ -11,7 +13,7 @@ import os
 import logging
 import random
 import asyncio
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
@@ -66,12 +68,12 @@ WELCOME_PHRASES = [
 ]
 
 # -------------------- KEYBOARDS --------------------
-# Главное меню услуг
+# Главное меню услуг (покажем "от" цены)
 services_kb = types.ReplyKeyboardMarkup(
     keyboard=[
-        [types.KeyboardButton("1⃣ Чертёж схемы")],
-        [types.KeyboardButton("2⃣ Консультация по расчёту нагрузок")],
-        [types.KeyboardButton("3⃣ Полная консультация")],
+        [types.KeyboardButton("1⃣ Чертёж схемы (от 2490 ₽)")],
+        [types.KeyboardButton("2⃣ Консультация по нагрузкам (от 1990 ₽)")],
+        [types.KeyboardButton("3⃣ Полная консультация (от 4990 ₽)")],
         [types.KeyboardButton("4⃣ Другое")],
     ],
     resize_keyboard=True,
@@ -164,23 +166,48 @@ class Form(StatesGroup):
 
 # -------------------- PRICING --------------------
 URGENCY_COEFFICIENTS = {
-    "Срочно 24 часа": 1.5,
-    "В течении 3-5 дней": 1.2,
+    "Срочно 24 часа": 1.4,     # мягче, было 1.5
+    "В течении 3-5 дней": 1.15,  # мягче, было 1.2
     "Стандартно 7 дней": 1.0,
 }
 
+# Базы под "низ рынка"
 DRAFT_BASE = {
-    "draft_oneline": 7000,
-    "draft_mount": 9000,
-    "draft_other": 8000,
+    "draft_oneline": 2490,   # было 7000
+    "draft_mount": 3490,     # было 9000
+    "draft_other": 2990,     # было 8000
 }
 LOADS_BASE = {
-    "loads_pick": 6000,
-    "loads_audit": 8000,
-    "loads_phases": 7000,
-    "loads_other": 6500,
+    "loads_pick": 1990,      # было 6000
+    "loads_audit": 2990,     # было 8000
+    "loads_phases": 2490,    # было 7000
+    "loads_other": 2290,     # было 6500
 }
-FULL_BASE = 15000
+FULL_BASE = 4990            # было 15000
+
+# Акция "Бета" через ENV
+PROMO_BETA = _bool_env("PROMO_BETA", default=False)
+try:
+    PROMO_DISCOUNT = float(os.getenv("PROMO_DISCOUNT", "0.20"))
+    if PROMO_DISCOUNT < 0:
+        PROMO_DISCOUNT = 0.0
+    if PROMO_DISCOUNT > 0.9:
+        PROMO_DISCOUNT = 0.9
+except Exception:
+    PROMO_DISCOUNT = 0.20
+
+def _fmt_rub(x: int) -> str:
+    return f"{x:,} руб.".replace(",", " ")
+
+def _apply_promo(total: int) -> Tuple[int, Optional[int], str]:
+    """
+    Возвращает (old, new_or_None, note)
+    """
+    if PROMO_BETA and PROMO_DISCOUNT > 0:
+        new_total = int(round(total * (1.0 - PROMO_DISCOUNT)))
+        note = f"🎉 Бета −{int(PROMO_DISCOUNT * 100)}%"
+        return total, new_total, note
+    return total, None, ""
 
 # -------------------- COUNTER --------------------
 def init_request_counter() -> None:
@@ -216,62 +243,96 @@ def calc_price_draft(state_data: dict) -> str:
     sub = state_data.get("sub_category", "draft_other")
     base = DRAFT_BASE.get(sub, DRAFT_BASE["draft_other"])
     area = float(state_data.get("area") or 0)
+
+    # Площадь — мягче
     k_area = 1.0
-    if area > 80: k_area = 1.15
-    if area > 150: k_area = 1.3
+    if area > 80:
+        k_area = 1.07
+    if area > 150:
+        k_area = 1.15
+
+    # Меньше пенальти за отсутствие перечня групп
     if not state_data.get("has_list_of_groups", False):
-        base += 1500
+        base += 700  # было 1500
+
     total = int(base * k_area * _urgency_coeff(state_data))
+
+    old, new, promo_note = _apply_promo(total)
+    price_line = f"- Ориентировочная стоимость: {_fmt_rub(old)}"
+    if new is not None:
+        price_line = f"- Ориентировочная стоимость: ~{_fmt_rub(old)}~ → *{_fmt_rub(new)}* {promo_note}"
+
     lines = [
         "📐 *Предварительный расчёт (чертёж):*",
         f"- Подтип: {sub.replace('_', ' ')}",
         f"- Площадь: {int(area)} м²",
         f"- Перечень групп: {'есть' if state_data.get('has_list_of_groups') else 'нет'}",
         f"- Срочность: {state_data.get('urgency')} (x{_urgency_coeff(state_data)})",
-        f"- Ориентировочная стоимость: {total:,} руб.",
+        price_line,
         "\n_Итог зависит от состава задания и материалов._",
     ]
-    return "\n".join(lines).replace(",", " ")
+    return "\n".join(lines)
 
 def calc_price_loads(state_data: dict) -> str:
     sub = state_data.get("sub_category", "loads_other")
     base = LOADS_BASE.get(sub, LOADS_BASE["loads_other"])
     area = float(state_data.get("area") or 0)
     groups = int(state_data.get("groups_count") or 0)
-    k_area = 1.0 + min(area, 300) / 1000.0
-    k_groups = 1.0 + min(groups, 40) / 200.0
+
+    # Смягчённые коэффициенты
+    k_area = 1.0 + min(area, 300) / 1500.0   # максимум +0.20
+    k_groups = 1.0 + min(groups, 40) / 400.0 # максимум +0.10
+
     if state_data.get("need_inrush"):
-        base += 1000
+        base += 500  # было 1000
+
     total = int(base * k_area * k_groups * _urgency_coeff(state_data))
+
+    old, new, promo_note = _apply_promo(total)
+    price_line = f"- Ориентировочная стоимость: {_fmt_rub(old)}"
+    if new is not None:
+        price_line = f"- Ориентировочная стоимость: ~{_fmt_rub(old)}~ → *{_fmt_rub(new)}* {promo_note}"
+
     lines = [
         "🔌 *Предварительный расчёт (нагрузки):*",
         f"- Подтип: {sub.replace('_', ' ')}",
         f"- Площадь: {int(area)} м², групп: {groups}",
         f"- Пусковые токи: {'учитывать' if state_data.get('need_inrush') else 'нет'}",
         f"- Срочность: {state_data.get('urgency')} (x{_urgency_coeff(state_data)})",
-        f"- Ориентировочная стоимость: {total:,} руб.",
+        price_line,
         "\n_Окончательная стоимость уточняется после анализа входных данных._",
     ]
-    return "\n".join(lines).replace(",", " ")
+    return "\n".join(lines)
 
 def calc_price_full(state_data: dict) -> str:
     base = FULL_BASE
     area = float(state_data.get("area") or 0)
     rooms = int(state_data.get("rooms") or 0)
+
+    # Опция подешевле
     if state_data.get("need_mount_scheme"):
-        base += 3000
-    k_area = 1.0 + min(area, 300) / 800.0
-    k_rooms = 1.0 + min(rooms, 20) / 100.0
+        base += 1500  # было 3000
+
+    # Мягкие коэфы
+    k_area = 1.0 + min(area, 300) / 2000.0  # максимум +0.15
+    k_rooms = 1.0 + min(rooms, 20) / 200.0  # максимум +0.10
+
     total = int(base * k_area * k_rooms * _urgency_coeff(state_data))
+
+    old, new, promo_note = _apply_promo(total)
+    price_line = f"- Ориентировочная стоимость: {_fmt_rub(old)}"
+    if new is not None:
+        price_line = f"- Ориентировочная стоимость: ~{_fmt_rub(old)}~ → *{_fmt_rub(new)}* {promo_note}"
+
     lines = [
         "🧩 *Предварительный расчёт (полная консультация):*",
         f"- Площадь: {int(area)} м², помещений: {rooms}",
         f"- Монтажная схема: {'нужна' if state_data.get('need_mount_scheme') else 'не нужна'}",
         f"- Срочность: {state_data.get('urgency')} (x{_urgency_coeff(state_data)})",
-        f"- Ориентировочная стоимость: {total:,} руб.",
+        price_line,
         "\n_Итоговая смета формируется после детализации задания._",
     ]
-    return "\n".join(lines).replace(",", " ")
+    return "\n".join(lines)
 
 # -------------------- HANDLERS --------------------
 @dp.message_handler(lambda m: m.text == "Отмена заявки", state="*")
@@ -284,6 +345,8 @@ async def cmd_start(message: types.Message):
     await Form.service_category.set()
     await message.answer(
         "🔌 Добро пожаловать в *VoltHome (Бета)*!\n\n"
+        "Цены от: чертёж — *2 490 ₽*, нагрузки — *1 990 ₽*, полная — *4 990 ₽*.\n"
+        "Срочно 24 часа = +40%.\n\n"
         "Какая услуга вам требуется?",
         reply_markup=services_kb,
         parse_mode=USER_MD,
@@ -518,11 +581,15 @@ async def choose_urgency(message: types.Message, state: FSMContext):
     elif svc == "full":
         price_report = calc_price_full(data)
     else:  # other
+        old, new, promo_note = _apply_promo(0)
+        line = "- Стоимость будет рассчитана после ознакомления с ТЗ."
+        if new is not None:  # просто чтобы показать, что акция действует
+            line = f"- Стоимость будет рассчитана после ТЗ. {promo_note} на итог."
         price_report = (
             "📝 *Предварительная оценка:*\n"
             "- Услуга: Другое (по описанию)\n"
             f"- Срочность: {data.get('urgency')} (x{_urgency_coeff(data)})\n"
-            "_Стоимость будет рассчитана после ознакомления с ТЗ._"
+            f"{line}"
         )
 
     await state.update_data(price_report=price_report)
