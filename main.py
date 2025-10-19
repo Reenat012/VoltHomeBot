@@ -5,6 +5,10 @@ Webhook для Timeweb + авто-фолбэк в long polling.
 Услуги:
 1) Чертёж схемы (подтипы), 2) Консультация по расчёту нагрузок (подтипы),
 3) Полная консультация, 4) Другое.
+
+Политика минимизации данных:
+- Для связи с клиентом передаём только его Telegram ID.
+- Не собираем и не пересылаем full_name и username.
 """
 
 import os
@@ -164,26 +168,24 @@ class Form(StatesGroup):
 
 # -------------------- PRICING --------------------
 URGENCY_COEFFICIENTS = {
-    "Срочно 24 часа": 1.4,     # мягче, было 1.5
-    "В течении 3-5 дней": 1.15,  # мягче, было 1.2
+    "Срочно 24 часа": 1.4,
+    "В течении 3-5 дней": 1.15,
     "Стандартно 7 дней": 1.0,
 }
 
-# Базы под "низ рынка"
 DRAFT_BASE = {
-    "draft_oneline": 2490,   # было 7000
-    "draft_mount": 3490,     # было 9000
-    "draft_other": 2990,     # было 8000
+    "draft_oneline": 2490,
+    "draft_mount": 3490,
+    "draft_other": 2990,
 }
 LOADS_BASE = {
-    "loads_pick": 1990,      # было 6000
-    "loads_audit": 2990,     # было 8000
-    "loads_phases": 2490,    # было 7000
-    "loads_other": 2290,     # было 6500
+    "loads_pick": 1990,
+    "loads_audit": 2990,
+    "loads_phases": 2490,
+    "loads_other": 2290,
 }
-FULL_BASE = 4990            # было 15000
+FULL_BASE = 4990
 
-# Акция "Бета" через ENV
 PROMO_BETA = _bool_env("PROMO_BETA", default=False)
 try:
     PROMO_DISCOUNT = float(os.getenv("PROMO_DISCOUNT", "0.20"))
@@ -198,9 +200,6 @@ def _fmt_rub(x: int) -> str:
     return f"{x:,} руб.".replace(",", " ")
 
 def _apply_promo(total: int) -> Tuple[int, Optional[int], str]:
-    """
-    Возвращает (old, new_or_None, note)
-    """
     if PROMO_BETA and PROMO_DISCOUNT > 0:
         new_total = int(round(total * (1.0 - PROMO_DISCOUNT)))
         note = f"🎉 Бета −{int(PROMO_DISCOUNT * 100)}%"
@@ -242,16 +241,14 @@ def calc_price_draft(state_data: dict) -> str:
     base = DRAFT_BASE.get(sub, DRAFT_BASE["draft_other"])
     area = float(state_data.get("area") or 0)
 
-    # Площадь — мягче
     k_area = 1.0
     if area > 80:
         k_area = 1.07
     if area > 150:
         k_area = 1.15
 
-    # Меньше пенальти за отсутствие перечня групп
     if not state_data.get("has_list_of_groups", False):
-        base += 700  # было 1500
+        base += 700
 
     total = int(base * k_area * _urgency_coeff(state_data))
 
@@ -277,12 +274,11 @@ def calc_price_loads(state_data: dict) -> str:
     area = float(state_data.get("area") or 0)
     groups = int(state_data.get("groups_count") or 0)
 
-    # Смягчённые коэффициенты
-    k_area = 1.0 + min(area, 300) / 1500.0   # максимум +0.20
-    k_groups = 1.0 + min(groups, 40) / 400.0 # максимум +0.10
+    k_area = 1.0 + min(area, 300) / 1500.0
+    k_groups = 1.0 + min(groups, 40) / 400.0
 
     if state_data.get("need_inrush"):
-        base += 500  # было 1000
+        base += 500
 
     total = int(base * k_area * k_groups * _urgency_coeff(state_data))
 
@@ -307,13 +303,11 @@ def calc_price_full(state_data: dict) -> str:
     area = float(state_data.get("area") or 0)
     rooms = int(state_data.get("rooms") or 0)
 
-    # Опция подешевле
     if state_data.get("need_mount_scheme"):
-        base += 1500  # было 3000
+        base += 1500
 
-    # Мягкие коэфы
-    k_area = 1.0 + min(area, 300) / 2000.0  # максимум +0.15
-    k_rooms = 1.0 + min(rooms, 20) / 200.0  # максимум +0.10
+    k_area = 1.0 + min(area, 300) / 2000.0
+    k_rooms = 1.0 + min(rooms, 20) / 200.0
 
     total = int(base * k_area * k_rooms * _urgency_coeff(state_data))
 
@@ -581,7 +575,7 @@ async def choose_urgency(message: types.Message, state: FSMContext):
     else:  # other
         old, new, promo_note = _apply_promo(0)
         line = "- Стоимость будет рассчитана после ознакомления с ТЗ."
-        if new is not None:  # просто чтобы показать, что акция действует
+        if new is not None:
             line = f"- Стоимость будет рассчитана после ТЗ. {promo_note} на итог."
         price_report = (
             "📝 *Предварительная оценка:*\n"
@@ -592,12 +586,22 @@ async def choose_urgency(message: types.Message, state: FSMContext):
 
     await state.update_data(price_report=price_report)
     await Form.confirm.set()
+
+    # ⚠️ Явное предупреждение и согласие на передачу ТОЛЬКО Telegram ID
+    consent_text = (
+        "⚠️ *Важно: перед подтверждением*\n"
+        "Нажимая «✅ Подтвердить», вы соглашаетесь на передачу вашему проектировщику "
+        "*только вашего Telegram ID* для связи по заявке.\n\n"
+        "Мы не передаём ваше имя/username и другие персональные данные. "
+        "Telegram ID используется только для кнопки «написать клиенту»."
+    )
     confirm_kb = types.InlineKeyboardMarkup().row(
         types.InlineKeyboardButton("✅ Подтвердить", callback_data="confirm_yes"),
         types.InlineKeyboardButton("❌ Отменить", callback_data="confirm_no"),
     )
+
     await message.answer(price_report, parse_mode=USER_MD)
-    await message.answer("Подтвердить заявку?", reply_markup=confirm_kb)
+    await message.answer(consent_text, parse_mode=USER_MD, reply_markup=confirm_kb)
 
 # --- 10) Подтверждение и отправка ---
 @dp.callback_query_handler(lambda c: c.data in ("confirm_yes", "confirm_no"), state=Form.confirm)
@@ -610,13 +614,12 @@ async def confirm_cb(callback: types.CallbackQuery, state: FSMContext):
 
     req_num = get_next_request_number()
     data = await state.get_data()
-    username = f"@{callback.from_user.username}" if callback.from_user.username else "N/A"
 
-    # Текст отчёта для проектировщика — БЕЗ Markdown!
+    # Текст отчёта для проектировщика — БЕЗ Markdown и БЕЗ имени/username
+    # Передаём только Telegram ID и параметры заявки.
     lines = [
-        f"📋 Новая заявка! №{req_num}",
-        f"👤 {callback.from_user.full_name}",
-        f"🆔 {callback.from_user.id} | {username}",
+        f"📋 Новая заявка №{req_num}",
+        f"🆔 Telegram ID клиента: {callback.from_user.id}",
         f"Услуга: {data.get('service_category')} | Подтип: {data.get('sub_category', '—')}",
         f"Тип объекта: {data.get('object_type', '—')}",
         f"Площадь: {int(float(data.get('area', 0) or 0))} м²",
@@ -641,18 +644,22 @@ async def confirm_cb(callback: types.CallbackQuery, state: FSMContext):
         f"Срочность: {data.get('urgency', '—')}",
         "",
         "Детали расчёта:",
-        data.get("price_report", "—"),  # это уже с разметкой, но мы шлём без parse_mode -> отобразится обычным текстом
+        data.get("price_report", "—"),
     ]
     text_for_designer = "\n".join(lines)
 
     # отправка проектировщику (parse_mode НЕ указываем!)
     try:
+        contact_btn = types.InlineKeyboardButton(
+            "💬 Написать клиенту",
+            url=f"tg://user?id={callback.from_user.id}"  # только ID
+        )
+        kb = types.InlineKeyboardMarkup().add(contact_btn)
+
         await bot.send_message(
             chat_id=DESIGNER_CHAT_ID,
             text=text_for_designer,
-            reply_markup=types.InlineKeyboardMarkup().add(
-                types.InlineKeyboardButton("💬 Написать клиенту", url=f"tg://user?id={callback.from_user.id}")
-            ),
+            reply_markup=kb,
         )
         for kind, fid in data.get("attachments", []):
             if kind == "photo":
@@ -661,7 +668,6 @@ async def confirm_cb(callback: types.CallbackQuery, state: FSMContext):
                 await bot.send_document(DESIGNER_CHAT_ID, fid, caption=f"Заявка №{req_num}: документ")
     except Exception as e:
         logging.exception("Ошибка отправки заявки специалисту: %s", e)
-        # Сообщаем пользователю простым текстом (без Markdown), чтобы не дублировать проблему парсинга
         await callback.message.answer(
             "⚠️ Не удалось отправить заявку проектировщику. "
             "Проверьте, что боту разрешено писать в чат проектировщика."
@@ -671,7 +677,7 @@ async def confirm_cb(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.answer(
         f"✅ Ваша заявка принята! Номер №{req_num}\n"
         "Наш специалист свяжется с вами в ближайшее время.\n"
-        "Помните, консультация не заменяет проектирования!",
+        "_Помните, консультация не заменяет проектирования._",
         reply_markup=new_request_kb,
         parse_mode=USER_MD,
     )
