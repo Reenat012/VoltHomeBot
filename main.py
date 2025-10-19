@@ -590,10 +590,10 @@ async def choose_urgency(message: types.Message, state: FSMContext):
     # ⚠️ Явное предупреждение и согласие на передачу ТОЛЬКО Telegram ID
     consent_text = (
         "⚠️ *Важно: перед подтверждением*\n"
-        "Нажимая «✅ Подтвердить», вы соглашаетесь на передачу вашему проектировщику "
-        "*только вашего Telegram ID* для связи по заявке.\n\n"
+        "Нажимая «✅ Подтвердить», вы соглашаетесь на передачу оператору"
+        "*Telegram ID* для связи по заявке.\n\n"
         "Мы не передаём ваше имя/username и другие персональные данные. "
-        "Telegram ID используется только для кнопки «написать клиенту»."
+        "Telegram ID используется только для обратной связи по заявке."
     )
     confirm_kb = types.InlineKeyboardMarkup().row(
         types.InlineKeyboardButton("✅ Подтвердить", callback_data="confirm_yes"),
@@ -677,7 +677,8 @@ async def confirm_cb(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.answer(
         f"✅ Ваша заявка принята! Номер №{req_num}\n"
         "Наш специалист свяжется с вами в ближайшее время.\n"
-        "_Помните, консультация не заменяет проектирования._",
+        "_Помните, консультация не заменяет проектирования._\n"
+        "Услуга находится на Бета-тестировании",
         reply_markup=new_request_kb,
         parse_mode=USER_MD,
     )
